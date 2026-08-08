@@ -1,0 +1,43 @@
+version: "3.9"
+
+# Local development stack. For EC2 production deployment see
+# deploy/docker-compose.prod.yml instead (pulls a built image, no source
+# mount, real secrets via .env rather than the seeded demo data below).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mess
+      POSTGRES_PASSWORD: mess
+      POSTGRES_DB: ymca_mess
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Postgres runs every .sql file here, in filename order, ONLY on a
+      # fresh (empty) data directory — 0001_init.sql then 0002_seed.sql.
+      - ../backend/db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mess -d ymca_mess"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://mess:mess@postgres:5432/ymca_mess?sslmode=disable
+      PORT: 8080
+    ports:
+      - "8080:8080"
+
+volumes:
+  pg_data:
