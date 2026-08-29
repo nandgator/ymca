@@ -55,14 +55,14 @@ data.
 
 ## 7.4 Operational requirements
 
-| Concern | Requirement |
-|---|---|
-| OpenFGA availability | Higher than the application; its loss fails security-critical operations closed |
-| Outbox lag | Alert if undispatched rows exceed threshold — a stalled dispatcher means authority is not being granted |
-| Model deployment | FGA model is versioned; assertions run in CI; deployed before dependent code |
-| Migration | Forward-only; tuple rewrites batched and reversible |
-| Backup | PostgreSQL and OpenFGA backed up consistently; a restore that desynchronizes them is an authorization incident |
-| Audit retention | Longer than all other data classes; separate stream for high-severity |
+| Concern              | Requirement                                                                                                    |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| OpenFGA availability | Higher than the application; its loss fails security-critical operations closed                                |
+| Outbox lag           | Alert if undispatched rows exceed threshold — a stalled dispatcher means authority is not being granted        |
+| Model deployment     | FGA model is versioned; assertions run in CI; deployed before dependent code                                   |
+| Migration            | Forward-only; tuple rewrites batched and reversible                                                            |
+| Backup               | PostgreSQL and OpenFGA backed up consistently; a restore that desynchronizes them is an authorization incident |
+| Audit retention      | Longer than all other data classes; separate stream for high-severity                                          |
 
 ## 7.5 Environments
 

@@ -54,6 +54,7 @@ is immutable history).
 ### Default when no Entry and no Leave exists for a day (the "forgot" case)
 
 This default is **per meal type**, not a single global default:
+
 - `BREAKFAST` with no entry → **not billed**, treated as absent.
 - `DINNER` with no entry → **billed**, treated as present (baseline veg rate).
 

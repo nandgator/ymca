@@ -46,7 +46,7 @@ alice → ADMIN
 ```
 
 In a multi-tenant federation this is actively dangerous. It has no concept of
-*where* the role applies, and it produces role explosion the moment
+_where_ the role applies, and it produces role explosion the moment
 inheritance appears: `bombay_procter_pool_manager`,
 `bombay_central_pool_manager`, and so on until nobody can audit anything.
 
@@ -154,7 +154,7 @@ ReBAC   membership, hierarchy, ownership, delegation
 ABAC    state, context, attribute constraints
 ```
 
-Role *definitions* may be global. Role *assignments* are always scoped.
+Role _definitions_ may be global. Role _assignments_ are always scoped.
 
 ```txt
 Definition:   Branch Secretary → member.read, member.update
@@ -227,8 +227,8 @@ PostgreSQL transaction
 ```
 
 Two-phase commit across PostgreSQL and OpenFGA is substantial operational
-cost for little benefit. A brief lag on *granting* authority is acceptable.
-A lag on *revoking* it is not — so security-sensitive transitions
+cost for little benefit. A brief lag on _granting_ authority is acceptable.
+A lag on _revoking_ it is not — so security-sensitive transitions
 (revocation, suspension, role removal) write synchronously before the
 operation becomes externally effective.
 
@@ -259,7 +259,7 @@ Can(subject, action, resource, context)?
   ALLOW / DENY
 ```
 
-Steps one to four answer *entitlement*. Step five answers *permission-now*.
+Steps one to four answer _entitlement_. Step five answers _permission-now_.
 Conflating them is the failure mode this architecture exists to prevent.
 
 **On unavailability**, failure is graded rather than uniform:
@@ -322,16 +322,16 @@ The movement's practices diverge so sharply between associations that
 encoding any of the following would make the platform unimplementable
 somewhere:
 
-| Question | Resolved by |
-|---|---|
-| Which plans exist, and what they cost | tenant configuration |
-| Whether facilities are bundled into membership | tenant configuration |
-| Whether staff are also members | tenant policy |
-| Which resource types exist | tenant, within system archetypes |
-| Who approves membership admission | tenant governance |
-| Constitutional eligibility criteria | tenant configuration |
-| Whether registry screening is available | jurisdiction, tenant-enabled |
-| Tax treatment | pluggable per-jurisdiction calculator |
+| Question                                       | Resolved by                           |
+| ---------------------------------------------- | ------------------------------------- |
+| Which plans exist, and what they cost          | tenant configuration                  |
+| Whether facilities are bundled into membership | tenant configuration                  |
+| Whether staff are also members                 | tenant policy                         |
+| Which resource types exist                     | tenant, within system archetypes      |
+| Who approves membership admission              | tenant governance                     |
+| Constitutional eligibility criteria            | tenant configuration                  |
+| Whether registry screening is available        | jurisdiction, tenant-enabled          |
+| Tax treatment                                  | pluggable per-jurisdiction calculator |
 
 The platform ships **machinery**, not answers. This is not indecision; it is
 the direct consequence of Principle 1. A sovereign tenant that cannot express
@@ -341,14 +341,14 @@ its own constitution is not sovereign.
 
 ## 4.8 Solution strategy summary
 
-| Quality goal | Approach |
-|---|---|
-| Tenant sovereignty | Mandatory tenant ancestor; explicit cross-tenant grants; dual-layer isolation |
-| Auditability | No negative scoping; explicit sanctions; both principals recorded; blast-radius confirmation on role edits |
-| Correctness under failure | Graded fail-closed; synchronous revocation; DB-enforced allocation exclusivity |
-| Adaptability across jurisdictions | Tenant-configured plans, policies, types; pluggable tax and screening |
-| Data protection | No PII in tuples; verdict-not-evidence; scoped, expiring consent grants |
-| Comprehensibility | Five principles; no exceptions carved into them |
+| Quality goal                      | Approach                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Tenant sovereignty                | Mandatory tenant ancestor; explicit cross-tenant grants; dual-layer isolation                              |
+| Auditability                      | No negative scoping; explicit sanctions; both principals recorded; blast-radius confirmation on role edits |
+| Correctness under failure         | Graded fail-closed; synchronous revocation; DB-enforced allocation exclusivity                             |
+| Adaptability across jurisdictions | Tenant-configured plans, policies, types; pluggable tax and screening                                      |
+| Data protection                   | No PII in tuples; verdict-not-evidence; scoped, expiring consent grants                                    |
+| Comprehensibility                 | Five principles; no exceptions carved into them                                                            |
 
 ---
 

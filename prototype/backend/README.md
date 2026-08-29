@@ -14,7 +14,7 @@ docker compose up --build
 This builds the backend image, starts Postgres, and applies
 `backend/db/migrations/0001_init.sql` (schema) then `0002_seed.sql` (demo
 hostel + one admin/secretary/member) automatically on first boot — only on
-a *fresh* Postgres volume. To reset: `docker compose down -v`.
+a _fresh_ Postgres volume. To reset: `docker compose down -v`.
 
 API is then at `http://localhost:8080`. Try:
 
