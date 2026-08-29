@@ -118,6 +118,10 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-100](#adr-100) | Consumption enters the charge vocabulary                 | R1         |
 | [ADR-101](#adr-101) | Async projection is fenced against synchronous removal   | R1         |
 | [ADR-102](#adr-102) | The reaching verbs are recorded, never graph-bearing     | R1         |
+| [ADR-103](#adr-103) | Invoice numbers come from a transactional counter        | R1         |
+| [ADR-104](#adr-104) | Lists authorize the scope, not the row                   | R1         |
+| [ADR-105](#adr-105) | The tenant is a path segment                             | R1         |
+| [ADR-106](#adr-106) | Authentication is a port                                 | R1         |
 
 ---
 
@@ -1655,7 +1659,7 @@ Recording them is worth the row. The governance relationship is real even
 where the platform declines to implement it, and the refusal is only
 defensible if it is visible.
 
-**Consequence.** 8.11's invariant 2 becomes expressible in its strong form.
+**Consequence.** 8.12's invariant 2 becomes expressible in its strong form.
 Previously a national body could not be granted `may_administer` at all, so
 "a body holding every verb but one reaches no member record" tested three
 verbs and proved little. `natl-sec` now holds all five in the A1.6 tuples and
@@ -1679,3 +1683,142 @@ national body admin over every unit in the target tenant. It is now
 holds member rosters is not established. This decision takes the safest
 reading. If rosters do flow upward, `may_read_member_data` needs a narrow real
 path and this ADR is revisited — see 05.1.11.
+
+---
+
+### ADR-103
+
+**Invoice numbers come from a transactional counter, not a sequence** · Accepted · R1
+
+**Decision.** Each tenant holds a counter row per series, and issuing an
+invoice increments it inside the same transaction that issues the invoice.
+
+```sql
+UPDATE invoice_number_series
+   SET next_value = next_value + 1
+ WHERE tenant_id = $1 AND series = $2 AND kind = 'LIVE'
+RETURNING next_value - 1;
+```
+
+A series is a financial year. Numbering happens at **issue**, never at draft
+creation — `invoice.number` stays null until then.
+
+**Rationale.** A PostgreSQL sequence cannot do this. `nextval` is deliberately
+non-transactional, so a rolled-back transaction keeps the number it consumed
+and the series acquires a gap. C11 is statutory; a gap is a defect a tenant
+must explain to an auditor.
+
+The row lock is the mechanism, not an accident of it. Gaplessness _is_
+serialization: two invoices cannot both be next.
+
+**Consequence.** Invoice issuance serializes per tenant per series. At
+association scale that is unremarkable, but the `UPDATE` should be the last
+statement before commit so the lock is held for as little of the transaction
+as possible.
+
+This makes 8.9's entry honest. It previously read "invoice numbering — NOT
+idempotent; allocation must be concurrency-safe (see 05.8.13)", pointing at an
+open item. The mechanism now exists.
+
+**Note.** Historical import (B5) allocates from a separate `IMPORTED` series so
+that loading last year's invoices cannot advance or gap the live counter.
+Imported invoices keep their original number text verbatim;
+`UNIQUE (tenant_id, number)` then makes a genuine collision a loud failure
+rather than a silent overwrite.
+
+---
+
+### ADR-104
+
+**Lists authorize the scope, not the row** · Accepted · R1
+
+**Decision.** A list endpoint names the scope object it lists under. The caller
+is checked once against that scope; the rows are then returned by ordinary
+tenant-scoped SQL beneath RLS.
+
+```txt
+GET  .../units/{unit}/members        check(caller, member_read, unit)
+                                     then SELECT ... WHERE unit_id = $1
+
+GET  .../consumption?type=&period=   check(caller, may_read, consumption_type)
+                                     then SELECT ... WHERE type_id = $1
+```
+
+Rows whose authorization is genuinely independent of their scope must be named
+explicitly, and are checked per row over the returned page only — bounded by
+the page size, never by the size of the result set.
+
+**Rationale.** The reverse-index question — "which objects may this caller
+see?" — is the expensive one in any Zanzibar-style model, and answering it
+means reconciling pagination across two stores. Almost no real screen needs
+it. "Members of this chapter" and "meals in this period" are lists under a
+scope, and the scope is what authority is held over.
+
+**Consequence.** No `ListObjects` on the read path, no permission projection to
+keep consistent, and pagination is plain keyset pagination in PostgreSQL. List
+latency becomes a database property with an index behind it, rather than a
+graph traversal with an unbounded result set.
+
+**The mechanism may under-report; it must never over-report.** A caller
+reachable to a row by some path other than the named scope sees fewer rows
+than they are entitled to. That is the safe direction, and it is the reason a
+list must never be used to prove a negative — "not in the list" does not mean
+"does not exist".
+
+---
+
+### ADR-105
+
+**The tenant is a path segment** · Accepted · R1
+
+**Decision.** Every tenant-plane route carries its tenant explicitly:
+
+```txt
+/api/v1/t/{tenant}/...
+```
+
+The principal's token also names a tenant. The two are compared on every
+request and a mismatch is rejected before routing.
+
+**Rationale.** 8.2 makes explicit tenant carriage load-bearing, and ADR-018
+rejects any check whose resource has no resolvable tenant ancestor. Both are
+enforceable by inspection when the tenant is in the URL, and both depend on
+decoding a token when it is not. Audit entries, access logs and support
+questions all name what was addressed rather than what was inferred.
+
+**Consequence.** Requesting another tenant is expressible, and therefore
+deniable and auditable — which is better than being inexpressible and
+therefore untested. Platform-plane routes live under a separate prefix and
+carry no tenant, per the two-plane separation.
+
+---
+
+### ADR-106
+
+**Authentication is a port; the slice ships a development implementation** · Accepted · R1
+
+**Decision.** The backend depends on an authentication port that turns a
+credential into a principal:
+
+```txt
+Authenticator
+    Authenticate(token) → (principal_id, principal_kind, tenant_id, expires_at)
+```
+
+`principal_kind` is `PERSONAL` or `ELEVATED` (ADR-066, ADR-067) — never both
+at once. The slice ships a development implementation; a deployment picks
+Cognito, Supabase or Appwrite behind the same port.
+
+**Rationale.** The provider is a deployment choice, not a tenant one, so a
+port with one concrete implementation per deployment is the whole of the
+abstraction needed. Modelling both principal kinds now matters more than the
+provider: they are the subjects of tuples, and retrofitting the split means
+reissuing every tuple whose subject is a principal.
+
+**Consequence.** Session lifetime, refresh, MFA on the platform plane, and
+ELEVATED issuance remain undesigned. They are the port's implementation
+concerns, and none of them changes the shape of the port.
+
+**Note.** The development implementation must be impossible to enable
+accidentally: it refuses to start unless explicitly selected, and a build
+intended for deployment does not contain it.

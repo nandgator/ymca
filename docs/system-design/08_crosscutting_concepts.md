@@ -410,8 +410,8 @@ Outbox dispatch         at-least-once; consumers must tolerate redelivery
 Payment webhooks        untrusted, verified, deduplicated by provider
                         reference, reconciled against a provider query
 Allocation inserts      the exclusion constraint makes retry safe
-Invoice numbering       NOT idempotent — allocation must be
-                        concurrency-safe (see 05.8.13)
+Invoice numbering       NOT idempotent — a counter row incremented
+                        inside the issuing transaction. ADR-103
 ```
 
 ---
@@ -436,7 +436,72 @@ depend on them.
 
 ---
 
-## 8.11 Testing
+## 8.11 Reading and listing
+
+Every scenario in 6 is a write or a single-object check. This section covers
+the other half of the traffic, which the admin surfaces are almost entirely
+made of.
+
+### One check, then SQL
+
+A list names the scope it lists under. Authority is held over that scope, so
+it is checked once (ADR-104):
+
+```txt
+1  resolve the scope object from the path
+2  check(caller, permission, scope)      one graph query
+3  SELECT ... WHERE scope = $1           keyset pagination, under RLS
+```
+
+There is no `ListObjects`, no permission projection, and no reconciliation
+between two stores at page boundaries. List latency is a database property
+with an index behind it.
+
+### Rows with independent authorization
+
+Where a row can be authorized by something other than its scope, that must be
+stated where the list is defined, and those rows are checked individually over
+the returned page:
+
+```txt
+page size N  →  at most N checks, never |result set| checks
+```
+
+If a screen needs this on every row, it is usually the wrong scope: the fix is
+to list under something the caller holds authority over, not to check harder.
+
+### Under-reporting is the safe direction
+
+A caller who could reach a row by some path other than the named scope sees
+fewer rows than they are entitled to. That is deliberate.
+
+```txt
+absent from a list   ≠   does not exist
+absent from a list   ≠   caller may not see it
+```
+
+A list must therefore never be used to prove a negative. Uniqueness,
+existence and eligibility are decided by a constraint or a check, never by an
+empty page — which is the same rule 11.3 applies to duplicate detection, for
+the same reason.
+
+### Pagination
+
+Keyset, not offset. Offset pagination over a table that is being written to
+skips and repeats rows, and consumption records are written continuously
+during service hours.
+
+```txt
+GET  ...?limit=50&cursor=<opaque>
+     → { items: [...], next_cursor: <opaque|null> }
+```
+
+The cursor encodes the sort key of the last row and is opaque to the client,
+so the sort can change without breaking pagers.
+
+---
+
+## 8.12 Testing
 
 The invariants from 04.9 are testable and should be tested as explicit
 negative cases:

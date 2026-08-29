@@ -82,6 +82,7 @@ kept short. Uniform depth is how design documents become unreadable.
 12_glossary.md
 A1_openfga_schema.md
 A2_data_model.md
+A3_api_contract.md
 ```
 
 One file per arc42 section, so that section numbers and filenames agree and
@@ -154,7 +155,7 @@ tenant configurability.
 | Foundation       | closed                                            |
 | Domain model     | ten contexts; 05.10 added at review R1            |
 | Concrete schemas | complete — A1, A2                                 |
-| Decision log     | 102 ADRs, all traceable                           |
+| Decision log     | 106 ADRs, all traceable                           |
 | Open questions   | 14 known gaps, 3 unresolved tensions — section 11 |
 
 All twelve arc42 sections and both appendices are written. What remains is

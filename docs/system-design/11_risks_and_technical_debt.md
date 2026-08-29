@@ -41,23 +41,22 @@ mediated by verified contact points so existence is not disclosed.
 
 ## 11.2 Known gaps
 
-| Gap                           | Impact                                                         | Where   |
-| ----------------------------- | -------------------------------------------------------------- | ------- |
-| Instructor double-booking     | Allocation protects resources, not people                      | 05.4.12 |
-| Gapless invoice numbering     | Statutory requirement; concurrency-safe allocation unspecified | 05.8.13 |
-| Deposit forfeiture rules      | Settlement exists; criteria unspecified                        | 05.8.13 |
-| Renewal workflow              | Referenced throughout; not designed                            | 05.3.12 |
-| Recurring schedule generation | Occurrences modelled individually                              | 05.4.12 |
-| Recurring bookings            | A weekly slot is N independent bookings                        | 05.5.11 |
-| Temporal policy resolution    | "What was the policy on a past date"                           | 05.7.11 |
-| Policy simulation             | No blast-radius view for policy changes                        | 05.7.11 |
-| Succession                    | Terms expire; no successor workflow                            | 05.6.12 |
-| Duplicate detection heuristic | Must not leak existence                                        | 05.2.12 |
-| Guardianship disputes         | Conflicting guardian instructions                              | 05.2.12 |
-| Multi-currency tenants        | One currency per invoice; untested across                      | 05.8.13 |
-| Accounting export             | No ledger integration                                          | 03.3    |
-| Appeal against restriction    | Likely out-of-platform                                         | 05.9.11 |
-| Upward member data            | Whether national bodies hold rosters is unestablished          | 05.1.11 |
+| Gap                           | Impact                                                | Where   |
+| ----------------------------- | ----------------------------------------------------- | ------- |
+| Instructor double-booking     | Allocation protects resources, not people             | 05.4.12 |
+| Deposit forfeiture rules      | Settlement exists; criteria unspecified               | 05.8.13 |
+| Renewal workflow              | Referenced throughout; not designed                   | 05.3.12 |
+| Recurring schedule generation | Occurrences modelled individually                     | 05.4.12 |
+| Recurring bookings            | A weekly slot is N independent bookings               | 05.5.11 |
+| Temporal policy resolution    | "What was the policy on a past date"                  | 05.7.11 |
+| Policy simulation             | No blast-radius view for policy changes               | 05.7.11 |
+| Succession                    | Terms expire; no successor workflow                   | 05.6.12 |
+| Duplicate detection heuristic | Must not leak existence                               | 05.2.12 |
+| Guardianship disputes         | Conflicting guardian instructions                     | 05.2.12 |
+| Multi-currency tenants        | One currency per invoice; untested across             | 05.8.13 |
+| Accounting export             | No ledger integration                                 | 03.3    |
+| Appeal against restriction    | Likely out-of-platform                                | 05.9.11 |
+| Upward member data            | Whether national bodies hold rosters is unestablished | 05.1.11 |
 
 ## 11.3 Unresolved tensions
 

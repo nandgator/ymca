@@ -550,6 +550,18 @@ CREATE TABLE invoice (
 );
 -- Issued invoices are immutable. Corrections are credit notes.
 
+CREATE TABLE invoice_number_series (
+    tenant_id  uuid NOT NULL REFERENCES tenant,
+    series     text NOT NULL,   -- financial year, e.g. '2026-27'
+    kind       text NOT NULL,   -- LIVE|IMPORTED. ADR-103
+    prefix     text,
+    next_value bigint NOT NULL DEFAULT 1,
+    PRIMARY KEY (tenant_id, series, kind)
+);
+-- Allocated by UPDATE ... RETURNING inside the issuing transaction,
+-- as late in it as possible. A sequence cannot be used: nextval is
+-- non-transactional, so a rollback would leave a gap. ADR-103
+
 CREATE TABLE charge (
     id          uuid PRIMARY KEY,
     invoice_id  uuid NOT NULL REFERENCES invoice,
@@ -788,10 +800,10 @@ CREATE TABLE audit_event (
 | Affiliation not self-referential                        | `CHECK`                                          |
 | Tenant isolation                                        | RLS, four documented exemptions                  |
 | No cycles in the DAG                                    | recursive CTE, pre-commit                        |
-| Gapless invoice numbering                               | see open item, 05.8.13                           |
 | One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation` |
 | One live consumption record per person per type per day | partial unique index                             |
 | A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                |
+| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103   |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not

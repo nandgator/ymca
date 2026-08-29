@@ -380,7 +380,7 @@ resources or finances. The path terminates.
 ```
 
 A national body may hold every authority verb and still have no expressible
-path to a member record. This is what invariant 2 in 8.11 tests, and it holds
+path to a member record. This is what invariant 2 in 8.12 tests, and it holds
 because of the shape of the model rather than because of discipline.
 
 ---
