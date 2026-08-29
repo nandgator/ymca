@@ -1,9 +1,9 @@
 -- 0001_init — the full A2 schema.
 --
 -- Source of truth: docs/system-design/A2_data_model.md, sections A2.2 to A2.10.
--- This file is that document in dependency order, plus the deviations listed
--- below. Every table, column, constraint and index in A2 appears here; nothing
--- appears here that A2 does not name, except where marked DEVIATION.
+-- This file is that document in dependency order. Every table, column,
+-- constraint and index in A2 appears here, and nothing appears here that A2
+-- does not name. The differences are formatting, listed below.
 --
 -- Forward-only (07_deployment_view.md §7.4). This file declares no Down
 -- section, and that is deliberate: `goose down` will refuse to run rather
@@ -12,53 +12,38 @@
 -- (The annotation is spelled out nowhere in this comment block on purpose:
 --  goose parses its directives out of comments, anywhere in the file.)
 --
--- ── DEVIATIONS FROM A2, all deliberate ──────────────────────────────────────
+-- ── DIFFERENCES FROM A2, all recorded there ────────────────────────────────
 --
--- D1  `location` is created here. A2.2 and A2.5 both reference it
---     (`organizational_unit.location_id`, `resource.location_id`) and A2
---     defines it nowhere. The shape below is the minimum those two foreign
---     keys require and is NOT part of the design record.
+-- D1  Table order is topological, not A2's presentation order. A2 groups by
+--     bounded context, which puts `verification` (A2.8) after `guardianship`
+--     (A2.3) that references it, `decision_record` (A2.7) after `membership`
+--     (A2.4), and `invoice` (A2.8) after `booking` (A2.5). A2.1 states that
+--     the migration reorders.
 --
--- D2  Table order differs from A2's presentation order. A2 groups by bounded
---     context, which puts `verification` (A2.8) after `guardianship` (A2.3)
---     that references it, `decision_record` (A2.7) after `membership` (A2.4),
---     and `invoice` (A2.8) after `booking` (A2.5). Order here is topological.
---
--- D3  `DEFAULT gen_random_uuid()` is applied to every `id`. A2's conventions
+-- D2  `DEFAULT gen_random_uuid()` is applied to every `id`. A2's conventions
 --     preamble states this; A2's table bodies omit it.
 --
--- D4  `FORCE ROW LEVEL SECURITY` accompanies every `ENABLE`. Without it the
---     table owner bypasses `tenant_isolation` entirely, and the owner is
---     whoever ran this migration. A2.1 gives only ENABLE.
---
--- D5  Role `ymca_app` is created. RLS does not apply to superusers, so the
---     application must not connect as one. A2 does not discuss database roles.
---
--- D6  Indexes that A2.12 leaves unnamed are named explicitly, so that a later
+-- D3  Indexes that A2.12 leaves unnamed are named explicitly, so that a later
 --     migration can refer to them.
 --
--- ── KNOWN HOLES, carried from A2 rather than fixed here ─────────────────────
+-- Three things this migration does that A2 did not originally say, and now
+-- does — `location` (A2.2), `FORCE ROW LEVEL SECURITY` and the `ymca_app`
+-- role (A2.1, ADR-108). They are no longer deviations.
 --
--- H1  Twelve tables carry no `tenant_id` and therefore get no RLS policy:
---     entitlement_grant, membership_dependent, membership_suspension,
---     subscription, price_component, charge, charge_component, party,
---     policy_definition, policy_binding, consumption_record_option,
---     authorization_outbox. They are tenant-scoped through a parent row.
---     `charge` in particular means invoice contents are reachable with an
---     invoice id alone. A2.1 says "every tenant-scoped table carries
---     tenant_id"; these do not.
+-- ── KNOWN GAPS, recorded in A2.1 and 11.2 ──────────────────────────────────
 --
--- H2  `current_setting('app.tenant_id')` without the missing_ok argument
---     raises rather than returning NULL when the setting is absent. This is
---     A2.1 verbatim. It fails closed, loudly, which is the safer of the two
---     — but it means every pooled connection must SET the setting before it
---     touches a tenant-scoped table.
+-- H1  Twelve tables carry no `tenant_id` and therefore get no RLS policy.
+--     `charge` and `charge_component` are the ones that matter: an invoice id
+--     alone reaches its contents.
+--
+-- H2  `current_setting('app.tenant_id')` without `missing_ok` raises rather
+--     than returning NULL when the setting is absent. A2.1 verbatim, and
+--     deliberate: a query that forgot its tenant is a defect. Every pooled
+--     connection must SET it before touching a tenant-scoped table.
 --
 -- H3  `verification`, `clearance` and `audit_event` have a nullable
---     `tenant_id` for deliberately global rows. Under the A2.1 policy,
---     `NULL = <uuid>` is NULL, so those global rows are invisible to every
---     tenant connection. Reading them needs a path this migration does not
---     provide.
+--     `tenant_id` for deliberately global rows, which the policy makes
+--     invisible to every tenant connection.
 --
 -- H4  No cycle check on `authorization_edge`. A2.2 specifies "recursive CTE,
 --     pre-commit, depth bounded by policy, default 12" — application code,
@@ -96,7 +81,7 @@ CREATE TABLE tenant (
     -- as affiliation and authority_grant rows. Principle 2.
 );
 
--- DEVIATION D1. Not in A2. Referenced by organizational_unit and resource.
+-- A2.2. Physical containment only; no authorization meaning (ADR-095).
 CREATE TABLE location (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id    uuid NOT NULL REFERENCES tenant,
@@ -957,8 +942,8 @@ BEGIN
     ]
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
-        -- DEVIATION D4. Without FORCE, the table owner — whoever ran this
-        -- migration — reads and writes every tenant's rows.
+        -- A2.1, ADR-108. Without FORCE the table owner — whoever ran this
+        -- migration — reads and writes every tenant's rows, silently.
         EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
         EXECUTE format(
             'CREATE POLICY tenant_isolation ON %I'
@@ -969,7 +954,7 @@ END $$;
 
 
 -- ─────────────────────────────────────────────────────────────
--- APPLICATION ROLE (DEVIATION D5)
+-- APPLICATION ROLE (A2.1, ADR-108)
 --
 -- RLS does not apply to superusers, and it does not apply to roles with
 -- BYPASSRLS. If the API connects as the cluster superuser then every
@@ -978,7 +963,7 @@ END $$;
 --
 -- `ymca_app` is NOLOGIN and holds only DML. The login role is created
 -- out of band and granted membership in it, so that no password appears
--- in a migration file. See backend/README.md.
+-- in a migration file. See backend/README.md and ADR-108.
 -- ─────────────────────────────────────────────────────────────
 
 -- +goose StatementBegin

@@ -1,58 +1,19 @@
-# A1.7 — the authorization model's test suite.
+# The authorization model's test suite, run by `go run ./cmd/fga test`.
 #
-# Source of truth: docs/system-design/A1_openfga_schema.md §A1.6 (tuples) and
-# §A1.7 (assertions). This file is those two sections made executable. It runs
-# in CI; a failure blocks the change (A1.8 rule 4).
+# Source of truth: A1.6 (tuple shapes and notation) and A1.7 (the assertions
+# themselves). A1.8 rule 7 makes the two impossible to drift apart: sync_test.go
+# fails if any assertion listed in A1.7 is missing here or carries a different
+# expectation, and if fga/model.fga differs from A1.2 by one character.
 #
-# The assertions below are A1.7 in order, with two changes and one addition,
-# each marked inline:
+# Tuples are `user relation object`, the order OpenFGA uses and the one A1.6
+# now states. Subjects are typed because the type is load-bearing: entitlement
+# flows to a `person` — a membership covers a human — while authority is held
+# by a `principal`, so that the same human acting personally and acting with
+# elevated authority stay distinguishable (ADR-106).
 #
-#   TYPED     A1.7 writes subjects bare — `alice`, `natl-sec`. The model does
-#             not: `resource.may_use` reaches a `person` through an
-#             entitlement bundle, while `organizational_unit.member_read`
-#             takes a `principal` directly. The same bare name is two
-#             different subjects depending on the relation. Spelled out here
-#             because a check cannot be run without it.
-#
-#   FIXTURE   Tuples A1.6 does not list, without which an A1.7 assertion
-#             cannot resolve. See DEFECT-1 below.
-#
-#   ADDED     Positive assertions that are not in A1.7. Each exists to prove
-#             that a neighbouring DENY is not vacuous. A negative test against
-#             an empty fixture passes for the wrong reason, which is exactly
-#             the weakness REVIEW.md §2 found in 8.12 test 2.
-#
-# ── DEFECT-1 · A1.6's tuples cannot satisfy A1.7's first assertion ──────────
-#
-# A1.6 lists, for Alice's pool entitlement:
-#
-#     subscription:sub-77 membership    membership:m-123
-#     subscription:sub-77 grants_bundle entitlement_bundle:pool-access
-#     resource:bombay/procter-pool entitled entitlement_bundle:pool-access#beneficiary
-#
-# But `entitlement_bundle.beneficiary` resolves through
-# `beneficiary from via_subscription`, and `via_subscription` is a relation
-# ON the bundle. Nothing reads `subscription.grants_bundle`. The tuple that
-# makes Alice a beneficiary — `entitlement_bundle:pool-access via_subscription
-# subscription:sub-77` — is absent from A1.6, and `membership:m-123 holder
-# person:alice` is absent too.
-#
-# Both are supplied below and marked FIXTURE. A1.6 should gain them.
-#
-# ── DEFECT-2 · `entitlement_bundle.via_plan` is unreachable ────────────────
-#
-#     define via_plan: [membership_plan#grants_bundle]
-#     define beneficiary: [person] or beneficiary from via_subscription
-#
-# `beneficiary` never mentions `via_plan`, so a bundle granted by a
-# membership plan entitles nobody. Every entitlement must be routed through
-# a `subscription` object, including one that exists only to carry the plan's
-# own bundle. `membership_plan.entitlement_bundle_id` in A2.4 implies the
-# other reading.
-#
-# This is not worked around here. The fixture routes everything through
-# subscriptions, which is what the model as written requires. Recorded so the
-# slice does not discover it while wiring admission.
+# The three assertions under "proof the fixture is not empty" in A1.7 are
+# positive twins of DENY assertions below. A negative test against a fixture
+# that grants nothing passes for the wrong reason.
 
 # ─────────────────────────────────────────────────────────────
 # FIXTURE
@@ -87,21 +48,34 @@ tuples:
   # ── Bombay · Alice's membership and entitlements ──────────
   - { user: "principal:alice", relation: "principal", object: "person:alice" }
   - { user: "tenant:bombay", relation: "tenant", object: "membership:m-123" }
-  # FIXTURE — absent from A1.6. Without it nothing makes Alice a beneficiary.
   - { user: "person:alice", relation: "holder", object: "membership:m-123" }
 
   - { user: "tenant:bombay", relation: "tenant", object: "entitlement_bundle:pool-access" }
   - { user: "membership:m-123", relation: "membership", object: "subscription:sub-77" }
-  # A1.6 lists this. Nothing in the model reads it — see DEFECT-2's neighbour.
-  # Kept so the fixture matches A1.6 rather than silently improving on it.
-  - { user: "entitlement_bundle:pool-access", relation: "grants_bundle", object: "subscription:sub-77" }
-  # FIXTURE — absent from A1.6. This is the tuple that actually entitles.
   - { user: "subscription:sub-77", relation: "via_subscription", object: "entitlement_bundle:pool-access" }
 
   - { user: "tenant:bombay", relation: "tenant", object: "entitlement_bundle:mess-access" }
   - { user: "membership:m-123", relation: "membership", object: "subscription:sub-88" }
-  - { user: "entitlement_bundle:mess-access", relation: "grants_bundle", object: "subscription:sub-88" }
   - { user: "subscription:sub-88", relation: "via_subscription", object: "entitlement_bundle:mess-access" }
+
+  # ── Bombay · entitlement conferred BY THE PLAN ────────────
+  # The Poona and Bombay shape: the category fee includes the facility,
+  # and the plan grants the bundle. One tuple per plan-bundle, one per
+  # membership. Amending what a category includes moves every member on
+  # it without touching a single member's tuples.
+  - { user: "tenant:bombay", relation: "tenant", object: "membership_plan:bombay/metropolitan" }
+  - { user: "tenant:bombay", relation: "tenant", object: "membership_plan:bombay/junior" }
+  - { user: "tenant:bombay", relation: "tenant", object: "entitlement_bundle:gym-access" }
+  - { user: "membership_plan:bombay/metropolitan", relation: "via_plan", object: "entitlement_bundle:gym-access" }
+  - { user: "membership:m-123#covered", relation: "covered_member", object: "membership_plan:bombay/metropolitan" }
+  - { user: "tenant:bombay", relation: "tenant", object: "resource:bombay/procter-gym" }
+  - { user: "organizational_unit:bombay/procter", relation: "auth_parent", object: "resource:bombay/procter-gym" }
+  - { user: "entitlement_bundle:gym-access#beneficiary", relation: "entitled", object: "resource:bombay/procter-gym" }
+
+  # A second member, on a category that does NOT include the gym.
+  - { user: "tenant:bombay", relation: "tenant", object: "membership:m-456" }
+  - { user: "person:dilip", relation: "holder", object: "membership:m-456" }
+  - { user: "membership:m-456#covered", relation: "covered_member", object: "membership_plan:bombay/junior" }
 
   # ── Bombay · resource, with two authorization parents ─────
   - { user: "tenant:bombay", relation: "tenant", object: "resource:bombay/procter-pool" }
@@ -154,13 +128,13 @@ assertions:
   # ── A1.7 · Must ALLOW ─────────────────────────────────────
 
   - name: "alice may_use the Procter pool"
-    user: "person:alice" # TYPED: entitlement reaches a person, not a principal
+    user: "person:alice"
     relation: "may_use"
     object: "resource:bombay/procter-pool"
     expect: true
 
   - name: "alice may_record her own dinner"
-    user: "person:alice" # TYPED
+    user: "person:alice"
     relation: "may_record"
     object: "consumption_type:bombay/dinner"
     expect: true
@@ -172,13 +146,13 @@ assertions:
     expect: true
 
   - name: "alice may read members at Procter"
-    user: "principal:alice" # TYPED: member_read takes a principal
+    user: "principal:alice"
     relation: "member_read"
     object: "organizational_unit:bombay/procter"
     expect: true
 
   - name: "member_read propagates down the DAG to a sub-unit"
-    user: "principal:alice" # TYPED
+    user: "principal:alice"
     relation: "member_read"
     object: "organizational_unit:bombay/procter/sub-unit"
     expect: true
@@ -213,21 +187,45 @@ assertions:
     object: "tenant:bombay"
     expect: true
 
-  # ── ADDED · the fixture is real, so the DENYs below are not vacuous ──
+  - name: "a plan's own bundle entitles the members on that plan"
+    user: "person:alice"
+    relation: "may_use"
+    object: "resource:bombay/procter-gym"
+    expect: true
 
-  - name: "ADDED — bombay-secretary DOES reach Procter for member_read"
+  - name: "one person holds both routes at once — plan gym and subscription pool"
+    user: "person:alice"
+    relation: "may_use"
+    object: "resource:bombay/procter-pool"
+    expect: true
+
+  - name: "a member on another category does not reach the gym"
+    user: "person:dilip"
+    relation: "may_use"
+    object: "resource:bombay/procter-gym"
+    expect: false
+
+  - name: "the plan route does not leak the subscription's bundle"
+    user: "person:dilip"
+    relation: "may_use"
+    object: "resource:bombay/procter-pool"
+    expect: false
+
+  # ── A1.7 · proof the fixture is not empty ──
+
+  - name: "bombay-secretary DOES reach Procter for member_read"
     user: "principal:bombay-secretary"
     relation: "member_read"
     object: "organizational_unit:bombay/procter"
     expect: true
 
-  - name: "ADDED — a finance reader IS a viewer of the invoice"
+  - name: "a finance reader IS a viewer of the invoice"
     user: "principal:bombay-finance"
     relation: "viewer"
     object: "invoice:bombay/inv-1"
     expect: true
 
-  - name: "ADDED — a Pune member DOES reach the Pune pool"
+  - name: "a Pune member DOES reach the Pune pool"
     user: "person:priya"
     relation: "may_use"
     object: "resource:pune/central-pool"
@@ -313,19 +311,19 @@ assertions:
   # ── A1.7 · Invariant 1 — no cross-tenant leakage ──
 
   - name: "invariant 1 — alice does not reach the Pune pool"
-    user: "person:alice" # TYPED
+    user: "person:alice"
     relation: "may_use"
     object: "resource:pune/central-pool"
     expect: false
 
   - name: "invariant 1 — alice does not read Pune members"
-    user: "principal:alice" # TYPED
+    user: "principal:alice"
     relation: "member_read"
     object: "organizational_unit:pune/central"
     expect: false
 
   - name: "invariant 1 — alice does not record Pune dinner"
-    user: "person:alice" # TYPED
+    user: "person:alice"
     relation: "may_record"
     object: "consumption_type:pune/dinner"
     expect: false

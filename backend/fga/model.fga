@@ -187,26 +187,32 @@ type membership
     define holder: [person]
     define dependent: [person]
     define covered: holder or dependent
-    define plan: [membership_plan]
 
 type membership_plan
   relations
     define tenant: [tenant]
-    define grants_bundle: [entitlement_bundle]
+    # The plan link, in the direction authorization can travel.
+    # OpenFGA traverses forward only, so the fact PostgreSQL stores
+    # as membership.plan_id is written here as the plan naming its
+    # memberships. One tuple per membership, written at admission.
+    # ADR-107
+    define covered_member: [membership#covered]
 
 type subscription
   relations
     define membership: [membership]
     define beneficiary: covered from membership
-    define grants_bundle: [entitlement_bundle]
 
 type entitlement_bundle
   relations
     define tenant: [tenant]
-    # Every route by which a person holds this bundle.
-    define via_plan: [membership_plan#grants_bundle]
+    # Every route by which a person holds this bundle. Both are
+    # real and they coexist within one tenant, on one person:
+    # a category whose fee includes the pool grants by plan, a
+    # monthly sports add-on grants by subscription. ADR-107
+    define via_plan: [membership_plan]
     define via_subscription: [subscription]
-    define beneficiary: [person] or beneficiary from via_subscription
+    define beneficiary: [person] or beneficiary from via_subscription or covered_member from via_plan
 
 
 # ─────────────────────────────────────────────────────────────

@@ -10,9 +10,15 @@ realizes.
 
 ## A1.1 Reading this schema
 
-Three conventions used throughout:
+Four conventions used throughout:
 
 ```txt
+ONE LINE PER DEFINE
+    The OpenFGA DSL has no line continuation. A relation wrapped
+    across lines for readability is a syntax error, not a style
+    choice. A1.2 was written wrapped and did not parse until
+    2026-08-29; see A1.8 rule 7 for what now prevents a repeat.
+
 OBJECT IDS ARE NAMESPACED
     organizational_unit:bombay/procter
     resource:bombay/procter-pool
@@ -112,20 +118,15 @@ type organizational_unit
     # Multiple parents permitted. Union over all paths.
     define auth_parent: [organizational_unit, tenant]
 
-    define admin: [principal]
-                  or admin from auth_parent
-                  or administered_by from tenant
+    define admin: [principal] or admin from auth_parent or administered_by from tenant
 
-    define member: [principal]
-                   or member from auth_parent
+    define member: [principal] or member from auth_parent
 
     define staff: [principal]
 
     # Per-permission propagation. ADR-014
     # member_read reaches descendants; unit_close does not.
-    define member_read: [principal]
-                        or member_read from auth_parent
-                        or admin
+    define member_read: [principal] or member_read from auth_parent or admin
     define unit_close: [principal] or admin
 
 
@@ -228,26 +229,32 @@ type membership
     define holder: [person]
     define dependent: [person]
     define covered: holder or dependent
-    define plan: [membership_plan]
 
 type membership_plan
   relations
     define tenant: [tenant]
-    define grants_bundle: [entitlement_bundle]
+    # The plan link, in the direction authorization can travel.
+    # OpenFGA traverses forward only, so the fact PostgreSQL stores
+    # as membership.plan_id is written here as the plan naming its
+    # memberships. One tuple per membership, written at admission.
+    # ADR-107
+    define covered_member: [membership#covered]
 
 type subscription
   relations
     define membership: [membership]
     define beneficiary: covered from membership
-    define grants_bundle: [entitlement_bundle]
 
 type entitlement_bundle
   relations
     define tenant: [tenant]
-    # Every route by which a person holds this bundle.
-    define via_plan: [membership_plan#grants_bundle]
+    # Every route by which a person holds this bundle. Both are
+    # real and they coexist within one tenant, on one person:
+    # a category whose fee includes the pool grants by plan, a
+    # monthly sports add-on grants by subscription. ADR-107
+    define via_plan: [membership_plan]
     define via_subscription: [subscription]
-    define beneficiary: [person] or beneficiary from via_subscription
+    define beneficiary: [person] or beneficiary from via_subscription or covered_member from via_plan
 
 
 # ─────────────────────────────────────────────────────────────
@@ -262,8 +269,7 @@ type resource
     define org_unit: [organizational_unit]
     define auth_parent: [organizational_unit, resource]
 
-    define manager: [principal]
-                    or admin from auth_parent
+    define manager: [principal] or admin from auth_parent
     define entitled: [entitlement_bundle#beneficiary]
 
     define may_use: entitled or manager
@@ -392,9 +398,7 @@ is the difference between:
 
 ```dsl
 # propagates through the DAG
-define member_read: [principal]
-                    or member_read from auth_parent
-                    or admin
+define member_read: [principal] or member_read from auth_parent or admin
 
 # does not propagate — local scope only
 define unit_close: [principal] or admin
@@ -411,21 +415,22 @@ in a diff. There is no global propagation switch.
 
 ## A1.5 What is deliberately absent
 
-| Absent                    | Why                                               | Lives in          |
-| ------------------------- | ------------------------------------------------- | ----------------- |
-| Membership suspension     | business state, changes for financial reasons     | PostgreSQL        |
-| Booking, stay, allocation | business state with time periods                  | PostgreSQL        |
-| Term windows              | temporal; would need clock-driven tuple rewrites  | PostgreSQL        |
-| Clearance validity        | same                                              | PostgreSQL        |
-| Restriction contents      | only readability is gated here                    | PostgreSQL        |
-| Policy values             | resolved and evaluated by the domain              | PostgreSQL        |
-| Enrollment                | business fact with price and state                | PostgreSQL        |
-| Consumption records       | business state; one per person per day            | PostgreSQL        |
-| Obligations               | derived at billing time, not authority            | PostgreSQL        |
-| Expected absence          | business state; relieves billing, not entitlement | PostgreSQL        |
-| Invoice contents          | business state                                    | PostgreSQL        |
-| Any PII                   | ADR-030                                           | nowhere in tuples |
-| `but not`                 | negative scoping prohibited                       | ADR-017           |
+| Absent                        | Why                                                                                                                 | Lives in          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Membership suspension         | business state, changes for financial reasons                                                                       | PostgreSQL        |
+| Booking, stay, allocation     | business state with time periods                                                                                    | PostgreSQL        |
+| Term windows                  | temporal; would need clock-driven tuple rewrites                                                                    | PostgreSQL        |
+| Clearance validity            | same                                                                                                                | PostgreSQL        |
+| Restriction contents          | only readability is gated here                                                                                      | PostgreSQL        |
+| Policy values                 | resolved and evaluated by the domain                                                                                | PostgreSQL        |
+| Enrollment                    | business fact with price and state                                                                                  | PostgreSQL        |
+| Which plan a membership is on | the _fact_ is business state; `membership_plan.covered_member` carries only the direction authorization must travel | PostgreSQL        |
+| Consumption records           | business state; one per person per day                                                                              | PostgreSQL        |
+| Obligations                   | derived at billing time, not authority                                                                              | PostgreSQL        |
+| Expected absence              | business state; relieves billing, not entitlement                                                                   | PostgreSQL        |
+| Invoice contents              | business state                                                                                                      | PostgreSQL        |
+| Any PII                       | ADR-030                                                                                                             | nowhere in tuples |
+| `but not`                     | negative scoping prohibited                                                                                         | ADR-017           |
 
 The unifying rule: **if it changes for business reasons, it is not
 authority.**
@@ -434,23 +439,42 @@ authority.**
 
 ## A1.6 Tuple examples
 
+Written `user relation object` throughout — the order OpenFGA itself uses.
+Earlier drafts of this section mixed that with `object relation user`, which
+is how a fixture ends up written backwards.
+
 ```txt
 # Alice is a member of YMCA Bombay
-principal:alice#... member    tenant:bombay
+principal:alice member tenant:bombay
 
 # Alice is Branch Secretary at Procter
-role_assignment:ra-001 definition   role_definition:branch-secretary
-role_assignment:ra-001 subject      principal:alice
-role_assignment:ra-001 scope        organizational_unit:bombay/procter
+role_definition:branch-secretary definition role_assignment:ra-001
+principal:alice                  subject    role_assignment:ra-001
+organizational_unit:bombay/procter scope    role_assignment:ra-001
 
 # The pool has two authorization parents (DAG)
-resource:bombay/procter-pool auth_parent organizational_unit:bombay/procter
-resource:bombay/procter-pool auth_parent organizational_unit:bombay/pe-dept
+organizational_unit:bombay/procter auth_parent resource:bombay/procter-pool
+organizational_unit:bombay/pe-dept auth_parent resource:bombay/procter-pool
 
-# Alice's pool subscription entitles her
-subscription:sub-77 membership      membership:m-123
-subscription:sub-77 grants_bundle   entitlement_bundle:pool-access
-resource:bombay/procter-pool entitled entitlement_bundle:pool-access#beneficiary
+# ── The two entitlement routes, both real. ADR-107 ──
+
+# BY SUBSCRIPTION — a monthly add-on bought on top of a category.
+# Note the direction: the BUNDLE names its subscription. The reverse
+# is not expressible, because OpenFGA traverses forward only.
+person:alice          holder           membership:m-123
+membership:m-123      membership       subscription:sub-77
+subscription:sub-77   via_subscription entitlement_bundle:pool-access
+entitlement_bundle:pool-access#beneficiary entitled resource:bombay/procter-pool
+
+# BY PLAN — a category whose fee includes the facility. One tuple
+# per membership, one per plan-bundle. Amending what the category
+# includes moves every member on it and touches no member's tuples.
+membership:m-123#covered        covered_member membership_plan:bombay/metropolitan
+membership_plan:bombay/metropolitan via_plan   entitlement_bundle:gym-access
+entitlement_bundle:gym-access#beneficiary entitled resource:bombay/procter-gym
+
+# Alice now holds both routes at once, which is the ordinary case
+# wherever a base category is sold alongside facility add-ons.
 
 # National body holds every authority verb over Bombay.
 # This is the strong form of invariant 2: not a body with one
@@ -460,12 +484,19 @@ principal:natl-sec may_review_compliance affiliation:india-bombay
 principal:natl-sec may_sanction          affiliation:india-bombay
 principal:natl-sec may_administer        affiliation:india-bombay
 principal:natl-sec may_read_member_data  affiliation:india-bombay
-affiliation:india-bombay from_tenant tenant:india
-affiliation:india-bombay to_tenant   tenant:bombay
+tenant:india       from_tenant           affiliation:india-bombay
+tenant:bombay      to_tenant             affiliation:india-bombay
 
 # Break-glass, on the ELEVATED principal, expiry in PostgreSQL
 principal:bob-elevated jit_grantee tenant:bombay
 ```
+
+**Subjects are typed, and the type is not decoration.** `person:alice` and
+`principal:alice` are different subjects reaching different relations.
+Entitlement flows to a **person** — a membership covers a human, not a login.
+Authority is held by a **principal**, because the same human acting personally
+and acting with elevated authority must be distinguishable (ADR-106). A1.7
+spells the type out on every line for this reason.
 
 ---
 
@@ -473,54 +504,88 @@ principal:bob-elevated jit_grantee tenant:bombay
 
 The model's test suite. These run in CI; a failure blocks the change.
 
+Every line is `user relation object`, and the user's type is part of it —
+`person:alice` and `principal:alice` are different subjects (A1.6). The suite
+that runs these lives at `backend/fga/assertions.yaml`; A1.8 rule 7 makes the
+two impossible to drift apart.
+
 ### Must ALLOW
 
 ```txt
-alice          may_use        resource:bombay/procter-pool
-alice          may_record     consumption_type:bombay/dinner
-warden         may_record_for_other consumption_type:bombay/dinner
-alice          member_read    organizational_unit:bombay/procter
-alice          member_read    organizational_unit:bombay/procter/sub-unit
-pe-head        may_close      resource:bombay/procter-pool
-procter-admin  may_close      resource:bombay/procter-pool
-natl-sec       may_sanction   affiliation:india-bombay
-natl-sec       may_administer affiliation:india-bombay
-bob-elevated   administered_by tenant:bombay
+person:alice             may_use              resource:bombay/procter-pool
+person:alice             may_record           consumption_type:bombay/dinner
+principal:warden         may_record_for_other consumption_type:bombay/dinner
+principal:alice          member_read          organizational_unit:bombay/procter
+principal:alice          member_read          organizational_unit:bombay/procter/sub-unit
+principal:pe-head        may_close            resource:bombay/procter-pool
+principal:procter-admin  may_close            resource:bombay/procter-pool
+principal:natl-sec       may_sanction         affiliation:india-bombay
+principal:natl-sec       may_administer       affiliation:india-bombay
+principal:bob-elevated   administered_by      tenant:bombay
 ```
+
+### Must ALLOW — the two entitlement routes (ADR-107)
+
+```txt
+person:alice             may_use              resource:bombay/procter-gym
+person:alice             may_use              resource:bombay/procter-pool
+```
+
+The first reaches the gym through the plan alone and the second reaches the
+pool through a subscription alone, on the same person. If either stops
+resolving, one of the two routes has been lost.
+
+### Must ALLOW — proof the fixture is not empty
+
+```txt
+principal:bombay-secretary member_read        organizational_unit:bombay/procter
+principal:bombay-finance   viewer             invoice:bombay/inv-1
+person:priya               may_use            resource:pune/central-pool
+```
+
+These exist only to keep the DENY assertions below honest. A negative test
+against a fixture that grants nothing passes for the wrong reason — which is
+exactly the weakness found in 8.12 test 2. Each one is the positive twin of a
+DENY: the same relation, on the same object, for a subject who _should_ reach
+it.
 
 ### Must DENY — the invariants
 
 ```txt
 # Invariant 2 — the central claim of the design.
 # natl-sec holds all five verbs (A1.6) and reaches nothing.
-natl-sec       member_read    organizational_unit:bombay/procter
-natl-sec       may_use        resource:bombay/procter-pool
-natl-sec       viewer         invoice:bombay/inv-1
-natl-sec       admin          organizational_unit:bombay/procter
-natl-sec       administered_by tenant:bombay
-natl-sec       member         tenant:bombay
-natl-sec       finance_reader tenant:bombay
-natl-sec       safeguarding_reader tenant:bombay
-natl-sec       may_record     consumption_type:bombay/dinner
+principal:natl-sec     member_read          organizational_unit:bombay/procter
+principal:natl-sec     may_use              resource:bombay/procter-pool
+principal:natl-sec     viewer               invoice:bombay/inv-1
+principal:natl-sec     admin                organizational_unit:bombay/procter
+principal:natl-sec     administered_by      tenant:bombay
+principal:natl-sec     member               tenant:bombay
+principal:natl-sec     finance_reader       tenant:bombay
+principal:natl-sec     safeguarding_reader  tenant:bombay
+principal:natl-sec     may_record           consumption_type:bombay/dinner
 
 # Invariant 9 — platform admin reaches no tenant object
-platform-op    member_read    organizational_unit:bombay/procter
-platform-op    viewer         invoice:bombay/inv-1
-platform-op    may_use        resource:bombay/procter-pool
+principal:platform-op  member_read          organizational_unit:bombay/procter
+principal:platform-op  viewer               invoice:bombay/inv-1
+principal:platform-op  may_use              resource:bombay/procter-pool
 
 # Invariant 1 — no cross-tenant leakage
-alice          may_use        resource:pune/central-pool
-alice          member_read    organizational_unit:pune/central
-alice          may_record     consumption_type:pune/dinner
+person:alice           may_use              resource:pune/central-pool
+principal:alice        member_read          organizational_unit:pune/central
+person:alice           may_record           consumption_type:pune/dinner
 
 # Entitlement does not confer recording for others
-alice          may_record_for_other consumption_type:bombay/dinner
+principal:alice        may_record_for_other consumption_type:bombay/dinner
+
+# One route does not confer the other's bundle. ADR-107
+person:dilip           may_use              resource:bombay/procter-gym
+person:dilip           may_use              resource:bombay/procter-pool
 
 # Per-permission propagation (ADR-014)
-bombay-secretary  unit_close  organizational_unit:bombay/procter
+principal:bombay-secretary unit_close       organizational_unit:bombay/procter
 
 # Personal principal holds no elevated authority
-bob-personal   administered_by tenant:bombay
+principal:bob-personal administered_by      tenant:bombay
 ```
 
 The first block is the one that matters. If `natl-sec` ever resolves to
@@ -540,7 +605,18 @@ rejected regardless of what else it enables.
    in this file why it is platform-plane.
 6  Migrations are forward-only; tuple rewrites are batched
    and reversible.
+7  A1.2 is the source of `backend/fga/model.fga`, and A1.7 of the
+   assertions actually run. A test fails if the model differs by
+   one character, or if any assertion listed in A1.7 is missing
+   from the suite or carries a different expectation.
 ```
 
 Rule 5 is the enforcement point for ADR-018. A type with no tenant path is
 either a platform-plane object or a defect, and the schema must say which.
+
+Rule 7 exists because rules 1 to 6 were all obeyed and the model still did
+not parse. A1.2 was wrapped across lines for readability, A1.6 was missing
+two tuples without which A1.7's first assertion could not resolve, and
+`entitlement_bundle.via_plan` was declared and read by nothing — none of
+which a human reader had caught in review. Prose cannot enforce prose. The
+check runs in CI with the assertions.

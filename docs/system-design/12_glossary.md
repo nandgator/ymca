@@ -191,6 +191,20 @@ Membership is the relationship with the association. Enrollment is
 participation in an offering. Five subscriptions do not make five
 memberships.
 
+**Subscription — ours vs theirs**
+Associations use _subscription_ for the recurring membership fee: YMCA Bombay
+admits an Associate on "entrance fee and subscription in advance". This design
+uses it for an entitlement add-on bought on top of a membership — Ernakulam's
+"access to the indoor and outdoor games with monthly subscription". Both
+senses are current, and the first conversation with a real association will
+hit the collision. When in doubt, say _membership fee_ for theirs and
+_entitlement subscription_ for ours. See ADR-107.
+
+**Plan-conferred vs subscription-conferred entitlement**
+A membership plan may grant an entitlement bundle to everyone on that plan;
+a subscription grants one to a single membership. Both routes exist, they
+coexist on one person, and neither is a special case of the other (ADR-107).
+
 **Office vs Role**
 An Office is a constitutional position with a term. A Role is a permission
 bundle. An office may confer a role; neither is the other.

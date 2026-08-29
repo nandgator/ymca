@@ -122,6 +122,8 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-104](#adr-104) | Lists authorize the scope, not the row                   | R1         |
 | [ADR-105](#adr-105) | The tenant is a path segment                             | R1         |
 | [ADR-106](#adr-106) | Authentication is a port                                 | R1         |
+| [ADR-107](#adr-107) | Entitlement reaches a person by plan or by subscription  | R5         |
+| [ADR-108](#adr-108) | Tenant isolation rests on a role, not only on the schema | R5         |
 
 ---
 
@@ -1822,3 +1824,97 @@ concerns, and none of them changes the shape of the port.
 **Note.** The development implementation must be impossible to enable
 accidentally: it refuses to start unless explicitly selected, and a build
 intended for deployment does not contain it.
+
+---
+
+### ADR-107
+
+**Entitlement reaches a person by plan or by subscription, and both routes are
+first-class** · Accepted · R5
+
+**Decision.** `entitlement_bundle` names its sources, and there are two:
+
+```dsl
+define via_plan: [membership_plan]
+define via_subscription: [subscription]
+define beneficiary: [person] or beneficiary from via_subscription or covered_member from via_plan
+```
+
+`membership_plan` gains `covered_member: [membership#covered]` — one tuple per
+membership, written at admission. `membership.plan`,
+`membership_plan.grants_bundle` and `subscription.grants_bundle` are removed:
+they expressed the same facts in the direction OpenFGA cannot travel, and
+nothing read them.
+
+**Rationale.** Both routes exist in the movement today, and they coexist inside
+a single association:
+
+```txt
+YMCA Poona       one category; the fee "includes the use of the Swimming
+                 pool, Health Club and other indoor Sports activities"
+YMCA Bombay      five categories; privileges "as laid down in the Bye-laws"
+YMCA Ernakulam   Associate and Life confer by category; Hostel Membership
+                 confers "access to the indoor and outdoor games with
+                 monthly subscription"
+```
+
+Ernakulam settles it: one person, one tenant, both routes at once.
+
+Requiring every entitlement to route through a `subscription` would make Poona
+create a synthetic subscription per member for a concept its domain does not
+have, and would turn a Bombay bye-law amendment — the plan-level act — into a
+tuple rewrite for every member of that category. Under `via_plan` the same
+amendment is one tuple.
+
+**Consequence.** Admission writes one `covered_member` tuple per membership.
+Selling an add-on writes a `subscription` and one `via_subscription` tuple.
+Changing what a category includes writes one `via_plan` tuple and moves every
+member on that category, which is the point.
+
+**Note.** The direction is not a matter of taste. OpenFGA traverses forward
+from the object, so the bundle must name its sources; the reverse — a plan
+naming the bundles it grants — is unreachable no matter how natural it reads.
+The original `via_plan: [membership_plan#grants_bundle]` was the natural
+reading and resolved to nothing at all. It was declared, never read, and the
+model shipped that way through a full review.
+
+**Terminology.** Associations use _subscription_ for the recurring membership
+fee itself. This design uses it for an entitlement add-on bought on top of a
+membership. The clash is real and will surface in the first conversation with
+a real association; 12 records it.
+
+---
+
+### ADR-108
+
+**Tenant isolation rests on a role grant, not only on the schema** · Accepted · R5
+
+**Decision.** Row level security is declared `ENABLE` **and** `FORCE`, and the
+application connects as a role that is neither a superuser nor a holder of
+`BYPASSRLS`. The migration role and the application role are different roles.
+
+**Rationale.** Three ways for a schema full of policies to isolate nothing,
+none of which produce an error:
+
+```txt
+no FORCE            the table owner is exempt; the owner is whoever migrated
+superuser           RLS does not apply, at all
+BYPASSRLS           same
+```
+
+Every one of them fails open and silently. `08.2` and `A2.1` treat tenant
+isolation as the design's central claim, and until this ADR that claim rested
+on a `CREATE POLICY` statement that a default deployment would have bypassed
+completely — the application connecting as the role that ran the migration is
+the obvious way to set a system up, and it is the one that removes isolation.
+
+**Consequence.** A deployment step creates the application login role and
+grants it membership in the DML-only role the migration defines. No password
+appears in a migration file. `audit_event` is append-only by privilege —
+`UPDATE` and `DELETE` are revoked from the application role — rather than by
+convention.
+
+**Note.** This is verifiable in about four queries and should be verified per
+environment, not assumed: connect as the application role, set one tenant, and
+confirm that a second tenant's rows are invisible and a cross-tenant insert is
+rejected.

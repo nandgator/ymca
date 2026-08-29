@@ -144,79 +144,50 @@ Verified against the running cluster: a `ymca_api` connection with
 
 ---
 
-## Deviations from the design record
+## Divergence from the design record
 
-Each is also recorded at the point in the file where it applies.
+There is none outstanding. Everything this directory does that A1 and A2 did
+not originally say has been written into them (`ADR-107`, `ADR-108`, `A1.1`,
+`A1.6`, `A1.7`, `A1.8` rule 7, `A2.1`, `A2.2`, `11.2`, `12`).
 
-### `migrations/0001_init.sql`
+What remains is formatting, and it is checked rather than promised:
 
-| #   | Deviation                                                                     |
-| --- | ----------------------------------------------------------------------------- |
-| D1  | `location` is created here. A2.2 and A2.5 reference it; A2 defines it nowhere |
-| D2  | Tables are in dependency order, not A2's presentation order                   |
-| D3  | `DEFAULT gen_random_uuid()` on every `id`, per A2's conventions preamble      |
-| D4  | `FORCE ROW LEVEL SECURITY` alongside every `ENABLE`                           |
-| D5  | Role `ymca_app` is created                                                    |
-| D6  | A2.12's unnamed indexes are given names                                       |
+| Difference                                         | Where                              |
+| -------------------------------------------------- | ---------------------------------- |
+| Tables in topological order, not A2's grouping     | `0001_init.sql`, per A2.1          |
+| `DEFAULT gen_random_uuid()` spelled out on each id | `0001_init.sql`, per A2's preamble |
+| A2.12's unnamed indexes given names                | `0001_init.sql`                    |
 
-Carried from A2 rather than fixed:
+### The drift guard
 
-- **Twelve tables carry no `tenant_id` and therefore no RLS policy** —
-  including `charge` and `charge_component`, which means invoice contents are
-  reachable with an invoice id alone. A2.1 says every tenant-scoped table
-  carries `tenant_id`; these do not.
-- **`verification`, `clearance` and `audit_event` have a nullable
-  `tenant_id`** for deliberately global rows. Under A2.1's policy those rows
-  are invisible to every tenant connection, and nothing here provides another
-  path to them.
-- **No cycle check on `authorization_edge`.** A2.2 specifies a pre-commit
-  recursive CTE bounded at depth 12. That is application code and is not
-  written. Until it is, the DAG is a graph.
-- **`audit_event` is not partitioned.** A2.10 marks it monthly on
-  `occurred_at`. C3 records that there are no scale figures yet, and
-  partitioning now would fix a key before anyone knows the retention policy.
+`go test ./fga/` implements A1.8 rule 7:
 
-### `fga/model.fga`
-
-**Not byte-identical to A1.2, because A1.2 does not parse.** The OpenFGA DSL
-requires each `define` on one line; A1.2 wraps four of them across six
-continuation lines for readability:
-
-```dsl
-define admin: [principal]
-              or admin from auth_parent      # <- syntax error
+```txt
+TestModelMatchesA1_2       model.fga must equal the A1.2 fence, byte for byte
+TestAssertionsCoverA1_7    every assertion A1.7 promises must actually run,
+                           with the expectation A1.7 gives it
 ```
 
-Those six lines are joined here. Nothing else changed: 315 lines became 310,
-and the model is otherwise A1.2 character for character. **A1.2 should be
-reformatted to match**, or the two will drift the first time someone edits one
-of those four relations.
+Both were checked against real drift, not just observed to pass: editing
+`model.fga`, deleting an assertion, and flipping an expectation each produce a
+failure naming the line.
 
-### `fga/assertions.yaml`
+This exists because A1.8 rules 1 to 6 were all obeyed and three defects
+shipped anyway — A1.2 did not parse, A1.6 was missing two tuples without which
+A1.7's first assertion could not resolve, and `entitlement_bundle.via_plan`
+was declared and read by nothing. All three are fixed; the guard is what stops
+the fourth.
 
-Two defects in A1, both demonstrated rather than argued — see the header
-comment in that file.
+### Known gaps, carried deliberately
 
-- **DEFECT-1: A1.6's tuples cannot satisfy A1.7's first assertion.** A1.6
-  lists `subscription:sub-77 grants_bundle entitlement_bundle:pool-access`,
-  but nothing in the model reads `subscription.grants_bundle`. The relation
-  that resolves is `entitlement_bundle.via_subscription`, and A1.6 never
-  writes it — nor `membership:m-123 holder person:alice`. Removing those two
-  tuples from the fixture fails `alice may_use` and `alice may_record`.
-- **DEFECT-2: `entitlement_bundle.via_plan` is unreachable.**
-  `define beneficiary: [person] or beneficiary from via_subscription` never
-  mentions `via_plan`, so a bundle conferred by a membership plan entitles
-  nobody. `membership_plan.entitlement_bundle_id` in A2.4 implies the other
-  reading. Admitting a member will need a synthetic `subscription` object
-  purely to carry the plan's own bundle, unless A1.2 changes.
+Recorded in `A2.1` and `11.2`, not worked around here:
 
-A1.7 also writes subjects bare — `alice`, `natl-sec`. The model does not:
-`resource.may_use` reaches a **person** through an entitlement bundle, while
-`organizational_unit.member_read` takes a **principal** directly. The same
-name is two different subjects depending on the relation. `assertions.yaml`
-spells the type out on every line and marks each one `TYPED`.
-
-Three assertions are marked `ADDED`. They are positive checks that exist to
-prove a neighbouring DENY is not vacuous — a negative test against an empty
-fixture passes for the wrong reason, which is the weakness `REVIEW.md` §2
-found in 8.12 test 2.
+- **Twelve tables carry no `tenant_id`** and so get no RLS policy —
+  `charge` and `charge_component` mean an invoice id reaches its contents.
+- **`verification`, `clearance`, `audit_event` have nullable `tenant_id`.**
+  The policy makes those global rows invisible to every tenant connection.
+- **No cycle check on `authorization_edge`.** A2.2 specifies a pre-commit
+  recursive CTE bounded at depth 12; it is application code and unwritten.
+  Until it exists the DAG is a graph.
+- **`audit_event` is not partitioned.** A2.10 marks it monthly on
+  `occurred_at`; C3 records that there are no scale figures to size it against.

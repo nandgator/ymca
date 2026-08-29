@@ -11,18 +11,69 @@ rather than deletes.
 
 ## A2.1 Conventions
 
+Tables here are grouped by bounded context, which is not a valid creation
+order — `guardianship` precedes the `verification` it references, `membership`
+precedes `decision_record`, `booking` precedes `invoice`. The migration
+orders them topologically.
+
+### Row level security
+
 ```sql
--- Every tenant-scoped table carries tenant_id and enables RLS.
 ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;
+ALTER TABLE <t> FORCE  ROW LEVEL SECURITY;   -- see below
 CREATE POLICY tenant_isolation ON <t>
   USING (tenant_id = current_setting('app.tenant_id')::uuid);
 ```
+
+`FORCE` is not optional and its absence is silent. Without it the table's
+**owner** — whoever ran the migration — is exempt from the policy and reads
+every tenant's rows. Nothing fails; isolation simply is not there.
+
+`ENABLE` and `FORCE` together are still not enough, because RLS does not
+apply to a superuser or to any role holding `BYPASSRLS`. **The application
+must connect as neither.** Two roles, and they are not interchangeable
+(ADR-108):
+
+```txt
+migration role   superuser or table owner; needs DDL; exempt from RLS
+application role no superuser, no BYPASSRLS, DML only; subject to RLS
+```
+
+A deployment that runs the API as its migration role has a schema full of
+policies and no isolation. This is the design's central claim, so it is worth
+stating that it rests on a role grant rather than on the schema alone.
+
+### Every connection names its tenant
+
+`current_setting('app.tenant_id')` is written without the `missing_ok`
+argument deliberately. A connection that has not set it **raises** rather than
+returning zero rows: a query that forgot its tenant is a defect, and failing
+loudly is better than returning an empty result the caller reads as "none".
+
+The cost is that every pooled connection must set the value before touching a
+tenant-scoped table, including after the pool resets it.
 
 ```txt
 EXEMPT FROM RLS — deliberately global (08.2)
     person, principal, guardianship, restriction
     Protected by application-level relationship checks.
+
+NO POLICY, because the table carries no tenant_id
+    entitlement_grant, membership_dependent, membership_suspension,
+    subscription, price_component, charge, charge_component, party,
+    policy_definition, policy_binding, consumption_record_option,
+    authorization_outbox
+
+    These are tenant-scoped through a parent row, not by a column, so
+    the policy above cannot be written for them. `charge` and
+    `charge_component` are the ones that matter: an invoice id alone
+    reaches its contents. Known gap, 11.2.
 ```
+
+Three tables — `verification`, `clearance`, `audit_event` — have a **nullable**
+`tenant_id` for deliberately global rows. Under the policy above `NULL = <uuid>`
+is NULL, so those global rows are invisible to every tenant connection. Reading
+them needs a path this schema does not provide. Known gap, 11.2.
 
 Required extensions:
 
@@ -30,6 +81,9 @@ Required extensions:
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- allocation exclusion
 CREATE EXTENSION IF NOT EXISTS pgcrypto;     -- gen_random_uuid
 ```
+
+`pgcrypto` is redundant on PostgreSQL 13 and later, which provide
+`gen_random_uuid()` in core. Kept for older targets.
 
 ---
 
@@ -45,6 +99,22 @@ CREATE TABLE tenant (
     created_at      timestamptz NOT NULL DEFAULT now()
     -- NO parent_id. Relationships to other tenants exist only
     -- as affiliation and authority_grant rows. Principle 2.
+);
+
+-- Referenced by organizational_unit and resource. Physical containment
+-- only: it carries no authorization meaning whatever. ADR-095 keeps
+-- organizational, physical and authorization containment separate, and
+-- this is the physical one.
+CREATE TABLE location (
+    id           uuid PRIMARY KEY,
+    tenant_id    uuid NOT NULL REFERENCES tenant,
+    name         text NOT NULL,
+    address_line text,
+    locality     text,
+    region       text,
+    postal_code  text,
+    country_code char(2),
+    created_at   timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE organizational_unit (
@@ -788,22 +858,26 @@ CREATE TABLE audit_event (
 
 ## A2.11 Where the invariants live
 
-| Invariant                                               | Enforced by                                      |
-| ------------------------------------------------------- | ------------------------------------------------ |
-| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`             |
-| One active membership per tenant                        | partial unique index                             |
-| One elevated principal per person                       | partial unique index                             |
-| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                       |
-| One authority verb per pair                             | unique constraint                                |
-| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                  |
-| Guardian ≠ minor                                        | `CHECK`                                          |
-| Affiliation not self-referential                        | `CHECK`                                          |
-| Tenant isolation                                        | RLS, four documented exemptions                  |
-| No cycles in the DAG                                    | recursive CTE, pre-commit                        |
-| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation` |
-| One live consumption record per person per type per day | partial unique index                             |
-| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                |
-| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103   |
+| Invariant                                               | Enforced by                                                |
+| ------------------------------------------------------- | ---------------------------------------------------------- |
+| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                       |
+| One active membership per tenant                        | partial unique index                                       |
+| One elevated principal per person                       | partial unique index                                       |
+| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                 |
+| One authority verb per pair                             | unique constraint                                          |
+| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                            |
+| Guardian ≠ minor                                        | `CHECK`                                                    |
+| Affiliation not self-referential                        | `CHECK`                                                    |
+| Tenant isolation                                        | RLS, four documented exemptions                            |
+| No cycles in the DAG                                    | recursive CTE, pre-commit                                  |
+| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`           |
+| One live consumption record per person per type per day | partial unique index                                       |
+| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                          |
+| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103             |
+| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                        |
+| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108 |
+| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises              |
+| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role            |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not
