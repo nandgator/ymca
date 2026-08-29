@@ -124,8 +124,9 @@ REVOCATIONS may not   synchronous write before commit
 
 ```txt
 BEGIN
+  pg_advisory_xact_lock(hash(fence key))
   business mutation
-  INSERT INTO authorization_outbox (...)
+  INSERT INTO authorization_outbox (..., fence key)
 COMMIT
         ↓  dispatcher
     OpenFGA
@@ -135,7 +136,10 @@ COMMIT
 
 ```txt
 BEGIN
+  pg_advisory_xact_lock(hash(fence key))
   mark revoked in PostgreSQL
+  UPDATE authorization_outbox SET voided_at = now()
+    WHERE fence key matches AND dispatched_at IS NULL
   DELETE tuple from OpenFGA        ← synchronous, before commit
   if delete fails → ROLLBACK, report failure
 COMMIT
@@ -161,12 +165,44 @@ principal suspended            committee membership removed
 ```txt
 authorization_outbox
     id, aggregate_type, aggregate_id, event_type, payload,
-    created_at, dispatched_at, attempts, last_error
+    fence_subject, fence_relation, fence_object,
+    created_at, dispatched_at, voided_at, attempts, last_error
 ```
 
 At-least-once delivery. Tuple writes are idempotent, so redelivery is safe.
 Undispatched rows older than a threshold are an operational alert — a
 silently stalled dispatcher means authority is not being granted.
+
+This table projects authorization facts and nothing else. It is not the
+inter-context event bus of 05.0.8.
+
+### The fence
+
+Idempotency is not ordering. A row pending while a revocation runs would
+otherwise be applied afterwards and restore the tuple the revocation removed,
+with no synchronous path left to run again. Three obligations, per ADR-101:
+
+```txt
+1  every row projecting a revocable relation names it
+       fence_subject, fence_relation, fence_object — domain level;
+       the dispatcher renders the tuple
+
+2  grant and revoke of one fact serialize
+       pg_advisory_xact_lock(hash(fence key)) in either transaction
+
+3  the dispatcher holds its row lock across the OpenFGA write
+       SELECT ... FOR UPDATE SKIP LOCKED
+           WHERE dispatched_at IS NULL AND voided_at IS NULL
+       write tuple, set dispatched_at, COMMIT
+```
+
+The lock and the void are shown in the revocation path above. Voided rows are
+retained, not deleted — a row that had to be fenced is evidence of a race that
+reached production, and belongs in the record.
+
+Obligation 3 holds a row lock across a network call. `SKIP LOCKED` confines
+that to the one row; a statement timeout bounds it, rolling back and leaving
+the row pending for retry.
 
 ---
 
@@ -418,9 +454,14 @@ negative cases:
 10  no permission fails open
 ```
 
-Test 2 is the sharpest: a national body with every authority verb except
-`may_read_member_data` must be denied every path to a member record. It is
+Test 2 is the sharpest: a national body holding **all five** authority verbs
+must be denied every path to a member record, resource, invoice or unit. It is
 the single test that proves the design's central claim.
+
+The strong form is only expressible because `may_administer` and
+`may_read_member_data` are grantable relations that resolve to nothing
+(ADR-102). While they were absent from the schema, this test could grant only
+three verbs and proved correspondingly less.
 
 ### Model testing
 

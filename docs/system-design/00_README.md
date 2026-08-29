@@ -32,22 +32,22 @@ Depth is deliberately uneven. Sections carrying architectural risk are written
 to implementation-ready detail; sections that merely orient the reader are
 kept short. Uniform depth is how design documents become unreadable.
 
-| Section | Depth | Read if you are |
-|---|---|---|
-| 01 Introduction and Goals | terse | new to the project |
-| 02 Constraints | terse | assessing regulatory exposure |
-| 03 Context and Scope | terse | drawing the system boundary |
-| 04 Solution Strategy | full | **everyone — start here** |
-| 05 Building Block View | implementation-ready | implementing anything |
-| 06 Runtime View | full | implementing a workflow |
-| 07 Deployment View | terse | operating the system |
-| 08 Crosscutting Concepts | implementation-ready | touching auth, data, or audit |
-| 09 Architecture Decisions | decisions + rationale | asking "why is it like this?" |
-| 10 Quality Requirements | terse | testing or benchmarking |
-| 11 Risks and Technical Debt | terse | planning |
-| 12 Glossary | terse | reading anything else |
-| A1 OpenFGA Schema | implementation-ready | implementing authorization |
-| A2 Data Model | implementation-ready | implementing persistence |
+| Section                     | Depth                 | Read if you are               |
+| --------------------------- | --------------------- | ----------------------------- |
+| 01 Introduction and Goals   | terse                 | new to the project            |
+| 02 Constraints              | terse                 | assessing regulatory exposure |
+| 03 Context and Scope        | terse                 | drawing the system boundary   |
+| 04 Solution Strategy        | full                  | **everyone — start here**     |
+| 05 Building Block View      | implementation-ready  | implementing anything         |
+| 06 Runtime View             | full                  | implementing a workflow       |
+| 07 Deployment View          | terse                 | operating the system          |
+| 08 Crosscutting Concepts    | implementation-ready  | touching auth, data, or audit |
+| 09 Architecture Decisions   | decisions + rationale | asking "why is it like this?" |
+| 10 Quality Requirements     | terse                 | testing or benchmarking       |
+| 11 Risks and Technical Debt | terse                 | planning                      |
+| 12 Glossary                 | terse                 | reading anything else         |
+| A1 OpenFGA Schema           | implementation-ready  | implementing authorization    |
+| A2 Data Model               | implementation-ready  | implementing persistence      |
 
 **Shortest useful path:** 04 → 12 → 05 → 08.
 
@@ -72,6 +72,7 @@ kept short. Uniform depth is how design documents become unreadable.
     05.7_policy.md
     05.8_finance.md
     05.9_safeguarding_and_verification.md
+    05.10_consumption.md
 06_runtime_view.md
 07_deployment_view.md
 08_crosscutting_concepts.md
@@ -148,13 +149,13 @@ tenant configurability.
 
 ## Status
 
-| | |
-|---|---|
-| Foundation | closed |
-| Domain model | complete — all nine contexts |
-| Concrete schemas | complete — A1, A2 |
-| Decision log | 95 ADRs, all traceable |
-| Open questions | 14 known gaps, 3 unresolved tensions — section 11 |
+|                  |                                                   |
+| ---------------- | ------------------------------------------------- |
+| Foundation       | closed                                            |
+| Domain model     | ten contexts; 05.10 added at review R1            |
+| Concrete schemas | complete — A1, A2                                 |
+| Decision log     | 102 ADRs, all traceable                           |
+| Open questions   | 14 known gaps, 3 unresolved tensions — section 11 |
 
 All twelve arc42 sections and both appendices are written. What remains is
 validation against real associations, not further design.

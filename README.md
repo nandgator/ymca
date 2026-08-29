@@ -48,7 +48,7 @@ the change is wrong, not the principle.
 
 ## Architecture
 
-```
+```txt
                         Identity Provider (OIDC)
                                  │ authenticated principal
                                  ▼
@@ -60,7 +60,7 @@ the change is wrong, not the principle.
         ┌──────────────┐ ┌──────────────┐ ┌───────────┐
         │   Domain     │ │Authorization │ │  Policy   │
         │   Services   │─│   Service    │ │  Engine   │
-        │  (9 contexts)│ │              │ │           │
+        │ (10 contexts)│ │              │ │           │
         └──────┬───────┘ └──────┬───────┘ └───────────┘
                ▼                ▼
         ┌──────────────┐ ┌──────────────┐
@@ -89,7 +89,7 @@ Domain services **never implement their own authorization rules** — they call
 
 ### Bounded contexts
 
-Nine, each owning its data outright; none reaches into another's tables.
+Ten, each owning its data outright; none reaches into another's tables.
 Detailed in [`docs/system-design/05_building_block_view/`](./docs/system-design/05_building_block_view/).
 
 | Context      | Owns                                                  |
@@ -103,6 +103,7 @@ Detailed in [`docs/system-design/05_building_block_view/`](./docs/system-design/
 | Policy       | policy definitions, inheritance, evaluation           |
 | Finance      | invoices, charges, payments, reconciliation           |
 | Safeguarding | verifications, clearances, restrictions               |
+| Consumption  | consumption types, obligations, records, absence      |
 
 Plus two crosscutting services: **Authorization** (owns the FGA model,
 answers `check`, holds no business state) and **Platform** (tenant
@@ -131,7 +132,7 @@ cross-instance federation. See
 
 ## Repo layout
 
-```
+```txt
 docs/system-design/   the architecture description — read this first
 prototype/            archived YMCA Mess Management prototype (Go + KMP)
 README.md             this file

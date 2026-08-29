@@ -43,9 +43,9 @@ Caller                Auth Service         OpenFGA        PostgreSQL
 resolvable tenant ancestor is rejected before any graph query. This is the
 runtime enforcement of ADR-018.
 
-**Step 3 is why the graph alone is insufficient.** OpenFGA answers *is Alice
-related in a way that grants this*. PostgreSQL answers *is that relationship
-currently effective* — term not expired, clearance not lapsed, no restriction
+**Step 3 is why the graph alone is insufficient.** OpenFGA answers _is Alice
+related in a way that grants this_. PostgreSQL answers _is that relationship
+currently effective_ — term not expired, clearance not lapsed, no restriction
 in force. Both must pass.
 
 ### Why validity is not in the graph
@@ -204,13 +204,22 @@ Admin       Auth Service     OpenFGA      PostgreSQL     Caller
 ```
 
 **Ordering is deliberate and inverted relative to grants.** The tuple is
-deleted *before* the transaction commits. If the OpenFGA delete fails, the
+deleted _before_ the transaction commits. If the OpenFGA delete fails, the
 transaction rolls back and the revocation is reported as failed — the admin
 retries. The failure mode is "revocation didn't happen and you were told so,"
 never "revocation appeared to succeed but authority persisted."
 
 Grants use the outbox and may lag. Revocations may not. **Granting may lag;
 revoking may not.**
+
+### Ordering alone is not enough
+
+Deleting the tuple first defeats a tuple that exists. It does nothing about a
+grant of the same fact that has not been projected yet — the delete finds
+nothing, succeeds, and the pending row is applied afterwards. The transaction
+above therefore also takes `pg_advisory_xact_lock` on the fence key and voids
+pending outbox rows carrying it, before the delete. ADR-101 and 8.3 carry the
+mechanism; without it, step 1 above is a no-op precisely when it matters most.
 
 Applies identically to: membership suspension, office vacation, clearance
 lapse, restriction imposition, affiliation sanction, cross-tenant grant
@@ -439,17 +448,17 @@ minutes causes almost none.
 
 ## 6.10 Scenario coverage
 
-| Scenario | Decisions exercised |
-|---|---|
-| 6.1 Authorization check | ADR-018, ADR-025, ADR-070, ADR-087 |
+| Scenario                 | Decisions exercised                |
+| ------------------------ | ---------------------------------- |
+| 6.1 Authorization check  | ADR-018, ADR-025, ADR-070, ADR-087 |
 | 6.2 Membership admission | ADR-046, ADR-026, ADR-050, ADR-083 |
-| 6.3 Booking | ADR-023, ADR-057, ADR-059, ADR-060 |
-| 6.4 Role revocation | ADR-026 |
-| 6.5 Break-glass | ADR-005, ADR-066, ADR-067, ADR-068 |
-| 6.6 Policy resolution | ADR-016, ADR-036, ADR-037 |
-| 6.7 Arrears | ADR-047 |
-| 6.8 Sanction | ADR-006, ADR-009, ADR-074 |
-| 6.9 Unavailability | ADR-027 |
+| 6.3 Booking              | ADR-023, ADR-057, ADR-059, ADR-060 |
+| 6.4 Role revocation      | ADR-026, ADR-101                   |
+| 6.5 Break-glass          | ADR-005, ADR-066, ADR-067, ADR-068 |
+| 6.6 Policy resolution    | ADR-016, ADR-036, ADR-037          |
+| 6.7 Arrears              | ADR-047                            |
+| 6.8 Sanction             | ADR-006, ADR-009, ADR-074          |
+| 6.9 Unavailability       | ADR-027                            |
 
 Scenarios not documented here — renewal, enrollment, stay check-in,
 reconciliation — follow patterns established above and are specified in their

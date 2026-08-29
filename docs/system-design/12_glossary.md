@@ -39,7 +39,9 @@ Principle 5.
 
 **Authority verb** — One of the five independent powers one organization may
 hold over another: `may_set_policy`, `may_review_compliance`, `may_sanction`,
-`may_administer`, `may_read_member_data`.
+`may_administer`, `may_read_member_data`. The first three resolve in the
+authorization graph; the last two are recorded and resolve to nothing, because
+they would act through the affiliation rather than on it (ADR-102).
 
 **Authorization containment** — The deliberately maintained graph that
 governs how scope propagates. A DAG. Permitted to disagree with both
@@ -67,11 +69,21 @@ expiry.
 permission — typically given by a guardian for a minor's data. Distinct from
 the guardianship relationship that makes it possible.
 
+**Consumption record** — A record of use that actually happened. Distinct from
+a Booking, which records use that was reserved. Creates no Allocation.
+
+**Consumption type** — A tenant-defined kind of consumption — dinner, gym
+entry, class attendance — declaring whether it obligates.
+
 **Dependent** — A person covered by another's membership without being its
 primary holder. Commercial, not legal.
 
 **Enrollment** — A person's participation in a specific Offering. Not a
 membership.
+
+**Expected absence** — A declared future non-use, relieving the obligation to
+record and, where tenant policy says so, the obligation to pay. Not a
+suspension: entitlement is untouched.
 
 **Entitlement** — What a person is related to or permitted in principle.
 Answered by authorization. Distinct from whether an operation may happen now.
@@ -86,6 +98,10 @@ relationship, not a person type.
 **JIT privileged access** — Just-in-time elevation of a human's authority for
 a stated reason, target, scope and duration, with full audit and automatic
 expiry. Replaces standing administrative identities.
+
+**Obligation** — A standing expectation that a person will consume something
+periodically. One row for the whole relationship; expected units are derived at
+billing time, never materialized per period.
 
 **Occurrence** — A single scheduled session of an Offering. Tuesday at 18:00.
 
@@ -224,6 +240,14 @@ The platform stores the first and never the second.
 Independent aggregates with independent state machines. They share only the
 Allocation beneath them.
 
+**Booking vs Consumption**
+Reservation versus realization. A booking that was not attended is a booking
+with no consumption record; a walk-in is a consumption record with no booking.
+
+**Absence vs Suspension**
+Absence means the person will not be present and keeps every entitlement.
+Suspension removes entitlement. Neither is derived; both are declared.
+
 **Walk-in vs Booked**
 A property of a time window on a resource, not of the resource.
 
@@ -231,23 +255,23 @@ A property of a time window on a resource, not of the resource.
 
 ## Terms deliberately not used
 
-**Branch** — use *Chapter*, or *Organizational Unit* when the type is not
+**Branch** — use _Chapter_, or _Organizational Unit_ when the type is not
 significant. "Branch" is ambiguous with version control in engineering
 conversation.
 
 **Parent YMCA** — implies authority that affiliation does not confer. Name
 the specific authority verb instead.
 
-**Superuser / God mode** — no such identity exists. Use *JIT privileged
-access* or *break-glass*.
+**Superuser / God mode** — no such identity exists. Use _JIT privileged
+access_ or _break-glass_.
 
 **Service account** (for humans) — a service account represents a non-human
-workload. Temporary human elevation is *JIT privileged access*.
+workload. Temporary human elevation is _JIT privileged access_.
 
 **Tenant admin** (as a synonym for platform access) — platform administration
 and tenant administration are separate planes and must not share vocabulary.
 
-**Permission group** — use *Role definition*.
+**Permission group** — use _Role definition_.
 
 **Facility** — ambiguous between Organizational Unit and Resource. Use the
 precise term.

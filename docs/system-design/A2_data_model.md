@@ -553,7 +553,9 @@ CREATE TABLE invoice (
 CREATE TABLE charge (
     id          uuid PRIMARY KEY,
     invoice_id  uuid NOT NULL REFERENCES invoice,
-    source_type text NOT NULL,
+    source_type text NOT NULL,   -- MEMBERSHIP|SUBSCRIPTION|ENROLLMENT|
+                                 -- BOOKING|STAY|CONSUMPTION|DEPOSIT|
+                                 -- DUES|ADJUSTMENT
     source_id   uuid,
     description text
 );
@@ -629,7 +631,95 @@ CREATE TABLE restriction (
 
 ---
 
-## A2.9 Infrastructure
+## A2.9 Consumption
+
+```sql
+CREATE TABLE consumption_type (
+    id                uuid PRIMARY KEY,
+    tenant_id         uuid NOT NULL REFERENCES tenant,
+    name              text NOT NULL,
+    resource_id       uuid REFERENCES resource,   -- nullable
+    obligates         boolean NOT NULL DEFAULT false,  -- opt-in. ADR-097
+    recurrence        text,          -- DAILY|WEEKLY|PER_OCCURRENCE
+    record_mode       text NOT NULL, -- SELF|STAFF|EITHER
+    correction_window interval,      -- null = unbounded
+    status            text NOT NULL,
+    CHECK (NOT obligates OR recurrence IS NOT NULL)
+);
+
+-- One row per person per type. NOT one per period. ADR-097
+CREATE TABLE consumption_obligation (
+    id                  uuid PRIMARY KEY,
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    consumption_type_id uuid NOT NULL REFERENCES consumption_type,
+    subject_person_id   uuid NOT NULL REFERENCES person,
+    effective           tstzrange NOT NULL,
+    source_type         text NOT NULL,   -- STAY|MEMBERSHIP|SUBSCRIPTION
+    source_id           uuid NOT NULL,
+    EXCLUDE USING gist (
+        consumption_type_id WITH =,
+        subject_person_id   WITH =,
+        effective           WITH &&
+    )
+);
+-- One obligation of a given type per person at a time.
+
+CREATE TABLE consumption_option (
+    id                  uuid PRIMARY KEY,
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    consumption_type_id uuid NOT NULL REFERENCES consumption_type,
+    code                text NOT NULL,
+    name                text NOT NULL,
+    charge_kind         text NOT NULL,          -- feeds ChargeComponent
+    amount              numeric(14,2) NOT NULL,
+    currency            char(3) NOT NULL,
+    status              text NOT NULL,          -- AVAILABLE|WITHDRAWN
+    UNIQUE (consumption_type_id, code)
+);
+
+-- Immutable. Corrections supersede. ADR-098
+CREATE TABLE consumption_record (
+    id                  uuid PRIMARY KEY,
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    consumption_type_id uuid NOT NULL REFERENCES consumption_type,
+    subject_person_id   uuid NOT NULL REFERENCES person,
+    actor_person_id     uuid NOT NULL REFERENCES person,
+    occurred_on         date NOT NULL,
+    obligation_id       uuid REFERENCES consumption_obligation,
+    allocation_id       uuid REFERENCES allocation,   -- realization. ADR-096
+    variant_code        text,
+    supersedes_id       uuid REFERENCES consumption_record,
+    recorded_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX one_live_record_per_subject_type_day
+  ON consumption_record (consumption_type_id, subject_person_id, occurred_on)
+  WHERE supersedes_id IS NULL;
+
+CREATE TABLE consumption_record_option (
+    consumption_record_id uuid NOT NULL REFERENCES consumption_record,
+    consumption_option_id uuid NOT NULL REFERENCES consumption_option,
+    PRIMARY KEY (consumption_record_id, consumption_option_id)
+);
+
+-- Relief flags snapshotted at declaration. ADR-099
+CREATE TABLE expected_absence (
+    id                    uuid PRIMARY KEY,
+    tenant_id             uuid NOT NULL REFERENCES tenant,
+    subject_person_id     uuid NOT NULL REFERENCES person,
+    period                tstzrange NOT NULL,
+    declared_by_person_id uuid NOT NULL REFERENCES person,
+    relieves_recording    boolean NOT NULL,
+    relieves_payment      boolean NOT NULL,
+    decision_record_id    uuid REFERENCES decision_record,
+    declared_at           timestamptz NOT NULL DEFAULT now(),
+    withdrawn_at          timestamptz
+);
+CREATE INDEX ON expected_absence USING gist (subject_person_id, period);
+```
+
+---
+
+## A2.10 Infrastructure
 
 ```sql
 CREATE TABLE authorization_outbox (
@@ -638,15 +728,31 @@ CREATE TABLE authorization_outbox (
     aggregate_id   uuid NOT NULL,
     event_type     text NOT NULL,
     payload        jsonb NOT NULL,
+    fence_subject  text,          -- the fact this row projects, at domain
+    fence_relation text,          -- level. The dispatcher renders the
+    fence_object   text,          -- tuple. ADR-101
     created_at     timestamptz NOT NULL DEFAULT now(),
     dispatched_at  timestamptz,
+    voided_at      timestamptz,   -- a revocation overtook this row. ADR-101
     attempts       int NOT NULL DEFAULT 0,
-    last_error     text
+    last_error     text,
+    CONSTRAINT fence_all_or_none CHECK (
+        num_nonnulls(fence_subject, fence_relation, fence_object) IN (0, 3)),
+    CONSTRAINT voided_not_dispatched CHECK (
+        voided_at IS NULL OR dispatched_at IS NULL)
 );
 CREATE INDEX outbox_pending
-  ON authorization_outbox (created_at) WHERE dispatched_at IS NULL;
+  ON authorization_outbox (created_at)
+  WHERE dispatched_at IS NULL AND voided_at IS NULL;
 -- Rows pending beyond threshold are an operational alert:
 -- a stalled dispatcher means authority is not being granted.
+CREATE INDEX outbox_fence
+  ON authorization_outbox (fence_subject, fence_relation, fence_object)
+  WHERE dispatched_at IS NULL AND voided_at IS NULL;
+-- Revocation voids pending rows for its fence key under
+-- pg_advisory_xact_lock, before deleting the tuple. ADR-101.
+-- This table projects authorization facts only; it is not the
+-- inter-context event bus of 05.0.8.
 
 CREATE TABLE audit_event (
     id                    bigserial PRIMARY KEY,
@@ -668,21 +774,24 @@ CREATE TABLE audit_event (
 
 ---
 
-## A2.10 Where the invariants live
+## A2.11 Where the invariants live
 
-| Invariant | Enforced by |
-|---|---|
-| No overlapping allocation | `EXCLUDE USING gist` on `allocation` |
-| One active membership per tenant | partial unique index |
-| One elevated principal per person | partial unique index |
-| Cross-tenant grants expire | `NOT NULL` on `expires_at` |
-| One authority verb per pair | unique constraint |
-| Party is exactly one kind | `CHECK (num_nonnulls(...) = 1)` |
-| Guardian ≠ minor | `CHECK` |
-| Affiliation not self-referential | `CHECK` |
-| Tenant isolation | RLS, four documented exemptions |
-| No cycles in the DAG | recursive CTE, pre-commit |
-| Gapless invoice numbering | see open item, 05.8.13 |
+| Invariant                                               | Enforced by                                      |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`             |
+| One active membership per tenant                        | partial unique index                             |
+| One elevated principal per person                       | partial unique index                             |
+| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                       |
+| One authority verb per pair                             | unique constraint                                |
+| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                  |
+| Guardian ≠ minor                                        | `CHECK`                                          |
+| Affiliation not self-referential                        | `CHECK`                                          |
+| Tenant isolation                                        | RLS, four documented exemptions                  |
+| No cycles in the DAG                                    | recursive CTE, pre-commit                        |
+| Gapless invoice numbering                               | see open item, 05.8.13                           |
+| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation` |
+| One live consumption record per person per type per day | partial unique index                             |
+| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not
@@ -690,7 +799,7 @@ exist yet.
 
 ---
 
-## A2.11 Indicative indexing
+## A2.12 Indicative indexing
 
 ```sql
 CREATE INDEX ON membership (tenant_id, person_id, state);
@@ -701,6 +810,7 @@ CREATE INDEX ON authorization_edge (parent_type, parent_id);
 CREATE INDEX ON verification (subject_type, subject_id, type, status);
 CREATE INDEX ON restriction (person_id) WHERE lifted_at IS NULL;
 CREATE INDEX ON audit_event (tenant_id, occurred_at DESC);
+CREATE INDEX ON consumption_record (tenant_id, subject_person_id, occurred_on);
 ```
 
 Partitioning candidates: `audit_event` monthly, `allocation` by tenant at

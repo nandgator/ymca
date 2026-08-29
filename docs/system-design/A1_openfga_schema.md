@@ -90,7 +90,13 @@ type tenant
 
     define finance_reader: [principal] or admin
     define safeguarding_reader: [principal]
-    define may_administer: admin or jit_grantee
+
+    # Internal administration of this tenant, by its own admins or
+    # by break-glass. NOT the cross-tenant authority verb of the
+    # same sense in 05.1.5 — that one is granted on `affiliation`
+    # and reaches nothing. Named apart so the two cannot be
+    # confused by a later edit. ADR-102
+    define administered_by: admin or jit_grantee
 
 
 # ─────────────────────────────────────────────────────────────
@@ -108,7 +114,7 @@ type organizational_unit
 
     define admin: [principal]
                   or admin from auth_parent
-                  or may_administer from tenant
+                  or administered_by from tenant
 
     define member: [principal]
                    or member from auth_parent
@@ -140,6 +146,15 @@ type affiliation
     define may_set_policy: [principal]
     define may_review_compliance: [principal]
     define may_sanction: [principal]
+
+    # The two reaching verbs. Recorded, never graph-bearing: they
+    # are grantable so that holding them is auditable, and they
+    # resolve to nothing. Real administration or data access goes
+    # through cross_tenant_grant — scoped, reasoned, expiring.
+    # Their inertness is enforced by the A1.7 assertions, not by
+    # anyone remembering this comment. ADR-102
+    define may_administer: [principal]
+    define may_read_member_data: [principal]
 
     define viewer: admin from from_tenant or admin from to_tenant
 
@@ -280,6 +295,28 @@ type offering
 
 
 # ─────────────────────────────────────────────────────────────
+# CONSUMPTION — entitlement only. Records, obligations and
+# absences are business state. ADR-096, ADR-097
+# ─────────────────────────────────────────────────────────────
+
+type consumption_type
+  relations
+    define tenant: [tenant]
+    define auth_parent: [organizational_unit, resource]
+
+    define manager: [principal] or admin from auth_parent
+    define entitled: [entitlement_bundle#beneficiary]
+
+    # Self-service recording follows entitlement, exactly as
+    # resource use does. Recording FOR someone else is staff work.
+    define may_record: entitled or manager
+    define may_record_for_other: [principal] or manager
+    define may_correct: [principal] or manager
+    define may_read: [principal] or manager
+    define may_close_period: manager
+
+
+# ─────────────────────────────────────────────────────────────
 # FINANCE — permissions are ordinary roles. Contents are not
 # tuples. ADR-082
 # ─────────────────────────────────────────────────────────────
@@ -374,18 +411,21 @@ in a diff. There is no global propagation switch.
 
 ## A1.5 What is deliberately absent
 
-| Absent | Why | Lives in |
-|---|---|---|
-| Membership suspension | business state, changes for financial reasons | PostgreSQL |
-| Booking, stay, allocation | business state with time periods | PostgreSQL |
-| Term windows | temporal; would need clock-driven tuple rewrites | PostgreSQL |
-| Clearance validity | same | PostgreSQL |
-| Restriction contents | only readability is gated here | PostgreSQL |
-| Policy values | resolved and evaluated by the domain | PostgreSQL |
-| Enrollment | business fact with price and state | PostgreSQL |
-| Invoice contents | business state | PostgreSQL |
-| Any PII | ADR-030 | nowhere in tuples |
-| `but not` | negative scoping prohibited | ADR-017 |
+| Absent                    | Why                                               | Lives in          |
+| ------------------------- | ------------------------------------------------- | ----------------- |
+| Membership suspension     | business state, changes for financial reasons     | PostgreSQL        |
+| Booking, stay, allocation | business state with time periods                  | PostgreSQL        |
+| Term windows              | temporal; would need clock-driven tuple rewrites  | PostgreSQL        |
+| Clearance validity        | same                                              | PostgreSQL        |
+| Restriction contents      | only readability is gated here                    | PostgreSQL        |
+| Policy values             | resolved and evaluated by the domain              | PostgreSQL        |
+| Enrollment                | business fact with price and state                | PostgreSQL        |
+| Consumption records       | business state; one per person per day            | PostgreSQL        |
+| Obligations               | derived at billing time, not authority            | PostgreSQL        |
+| Expected absence          | business state; relieves billing, not entitlement | PostgreSQL        |
+| Invoice contents          | business state                                    | PostgreSQL        |
+| Any PII                   | ADR-030                                           | nowhere in tuples |
+| `but not`                 | negative scoping prohibited                       | ADR-017           |
 
 The unifying rule: **if it changes for business reasons, it is not
 authority.**
@@ -412,8 +452,14 @@ subscription:sub-77 membership      membership:m-123
 subscription:sub-77 grants_bundle   entitlement_bundle:pool-access
 resource:bombay/procter-pool entitled entitlement_bundle:pool-access#beneficiary
 
-# National body may sanction — and only sanction
-principal:natl-sec may_sanction affiliation:india-bombay
+# National body holds every authority verb over Bombay.
+# This is the strong form of invariant 2: not a body with one
+# verb, but a body with all five, still reaching nothing.
+principal:natl-sec may_set_policy        affiliation:india-bombay
+principal:natl-sec may_review_compliance affiliation:india-bombay
+principal:natl-sec may_sanction          affiliation:india-bombay
+principal:natl-sec may_administer        affiliation:india-bombay
+principal:natl-sec may_read_member_data  affiliation:india-bombay
 affiliation:india-bombay from_tenant tenant:india
 affiliation:india-bombay to_tenant   tenant:bombay
 
@@ -431,22 +477,31 @@ The model's test suite. These run in CI; a failure blocks the change.
 
 ```txt
 alice          may_use        resource:bombay/procter-pool
+alice          may_record     consumption_type:bombay/dinner
+warden         may_record_for_other consumption_type:bombay/dinner
 alice          member_read    organizational_unit:bombay/procter
 alice          member_read    organizational_unit:bombay/procter/sub-unit
 pe-head        may_close      resource:bombay/procter-pool
 procter-admin  may_close      resource:bombay/procter-pool
 natl-sec       may_sanction   affiliation:india-bombay
-bob-elevated   may_administer tenant:bombay
+natl-sec       may_administer affiliation:india-bombay
+bob-elevated   administered_by tenant:bombay
 ```
 
 ### Must DENY — the invariants
 
 ```txt
-# Invariant 2 — the central claim of the design
+# Invariant 2 — the central claim of the design.
+# natl-sec holds all five verbs (A1.6) and reaches nothing.
 natl-sec       member_read    organizational_unit:bombay/procter
 natl-sec       may_use        resource:bombay/procter-pool
 natl-sec       viewer         invoice:bombay/inv-1
-natl-sec       may_administer tenant:bombay
+natl-sec       admin          organizational_unit:bombay/procter
+natl-sec       administered_by tenant:bombay
+natl-sec       member         tenant:bombay
+natl-sec       finance_reader tenant:bombay
+natl-sec       safeguarding_reader tenant:bombay
+natl-sec       may_record     consumption_type:bombay/dinner
 
 # Invariant 9 — platform admin reaches no tenant object
 platform-op    member_read    organizational_unit:bombay/procter
@@ -456,12 +511,16 @@ platform-op    may_use        resource:bombay/procter-pool
 # Invariant 1 — no cross-tenant leakage
 alice          may_use        resource:pune/central-pool
 alice          member_read    organizational_unit:pune/central
+alice          may_record     consumption_type:pune/dinner
+
+# Entitlement does not confer recording for others
+alice          may_record_for_other consumption_type:bombay/dinner
 
 # Per-permission propagation (ADR-014)
 bombay-secretary  unit_close  organizational_unit:bombay/procter
 
 # Personal principal holds no elevated authority
-bob-personal   may_administer tenant:bombay
+bob-personal   administered_by tenant:bombay
 ```
 
 The first block is the one that matters. If `natl-sec` ever resolves to

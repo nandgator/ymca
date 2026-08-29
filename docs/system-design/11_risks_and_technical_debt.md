@@ -41,22 +41,23 @@ mediated by verified contact points so existence is not disclosed.
 
 ## 11.2 Known gaps
 
-| Gap | Impact | Where |
-|---|---|---|
-| Instructor double-booking | Allocation protects resources, not people | 05.4.12 |
-| Gapless invoice numbering | Statutory requirement; concurrency-safe allocation unspecified | 05.8.13 |
-| Deposit forfeiture rules | Settlement exists; criteria unspecified | 05.8.13 |
-| Renewal workflow | Referenced throughout; not designed | 05.3.12 |
-| Recurring schedule generation | Occurrences modelled individually | 05.4.12 |
-| Recurring bookings | A weekly slot is N independent bookings | 05.5.11 |
-| Temporal policy resolution | "What was the policy on a past date" | 05.7.11 |
-| Policy simulation | No blast-radius view for policy changes | 05.7.11 |
-| Succession | Terms expire; no successor workflow | 05.6.12 |
-| Duplicate detection heuristic | Must not leak existence | 05.2.12 |
-| Guardianship disputes | Conflicting guardian instructions | 05.2.12 |
-| Multi-currency tenants | One currency per invoice; untested across | 05.8.13 |
-| Accounting export | No ledger integration | 03.3 |
-| Appeal against restriction | Likely out-of-platform | 05.9.11 |
+| Gap                           | Impact                                                         | Where   |
+| ----------------------------- | -------------------------------------------------------------- | ------- |
+| Instructor double-booking     | Allocation protects resources, not people                      | 05.4.12 |
+| Gapless invoice numbering     | Statutory requirement; concurrency-safe allocation unspecified | 05.8.13 |
+| Deposit forfeiture rules      | Settlement exists; criteria unspecified                        | 05.8.13 |
+| Renewal workflow              | Referenced throughout; not designed                            | 05.3.12 |
+| Recurring schedule generation | Occurrences modelled individually                              | 05.4.12 |
+| Recurring bookings            | A weekly slot is N independent bookings                        | 05.5.11 |
+| Temporal policy resolution    | "What was the policy on a past date"                           | 05.7.11 |
+| Policy simulation             | No blast-radius view for policy changes                        | 05.7.11 |
+| Succession                    | Terms expire; no successor workflow                            | 05.6.12 |
+| Duplicate detection heuristic | Must not leak existence                                        | 05.2.12 |
+| Guardianship disputes         | Conflicting guardian instructions                              | 05.2.12 |
+| Multi-currency tenants        | One currency per invoice; untested across                      | 05.8.13 |
+| Accounting export             | No ledger integration                                          | 03.3    |
+| Appeal against restriction    | Likely out-of-platform                                         | 05.9.11 |
+| Upward member data            | Whether national bodies hold rosters is unestablished          | 05.1.11 |
 
 ## 11.3 Unresolved tensions
 
@@ -91,18 +92,20 @@ model needs revisiting rather than working around.
 
 Ranked by how plausible the mistake is.
 
-| # | The temptation | Why it is wrong |
-|---|---|---|
-| 1 | Auto-create an authorization edge when an org unit gets a parent | Collapses authorization containment into organizational containment; undoes the central correction of the design |
-| 2 | Put `may_sanction` on `tenant` instead of `affiliation` | Removes the structural guarantee that sanction cannot reach data |
-| 3 | Add a `reason` field to application rejection | Creates a record the association never intended and may not lawfully hold |
-| 4 | Store the certificate number "just for reference" | Converts every tenant into a custodian of screening evidence |
-| 5 | Use `but not` for a scope exclusion | Makes "why can this person do this?" undecidable |
-| 6 | Move clearance validity into OpenFGA | Reintroduces sweeper-dependent expiry |
-| 7 | Make `Allocation` an aggregate root to restore DDD purity | Puts the exclusivity invariant back into application code |
-| 8 | Have Finance suspend memberships directly | Couples authorization to live financial state |
-| 9 | Give platform admin a "read everything" role for support | Defeats the two-plane separation entirely |
-| 10 | Render times in the viewer's timezone | Produces booking errors that are easy to create and hard to detect |
+| #   | The temptation                                                   | Why it is wrong                                                                                                                               |
+| --- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Auto-create an authorization edge when an org unit gets a parent | Collapses authorization containment into organizational containment; undoes the central correction of the design                              |
+| 2   | Put `may_sanction` on `tenant` instead of `affiliation`          | Removes the structural guarantee that sanction cannot reach data                                                                              |
+| 3   | Add a `reason` field to application rejection                    | Creates a record the association never intended and may not lawfully hold                                                                     |
+| 4   | Store the certificate number "just for reference"                | Converts every tenant into a custodian of screening evidence                                                                                  |
+| 5   | Use `but not` for a scope exclusion                              | Makes "why can this person do this?" undecidable                                                                                              |
+| 6   | Move clearance validity into OpenFGA                             | Reintroduces sweeper-dependent expiry                                                                                                         |
+| 7   | Make `Allocation` an aggregate root to restore DDD purity        | Puts the exclusivity invariant back into application code                                                                                     |
+| 8   | Have Finance suspend memberships directly                        | Couples authorization to live financial state                                                                                                 |
+| 9   | Give platform admin a "read everything" role for support         | Defeats the two-plane separation entirely                                                                                                     |
+| 10  | Render times in the viewer's timezone                            | Produces booking errors that are easy to create and hard to detect                                                                            |
+| 11  | Wire the `may_administer` verb into `tenant.administered_by`     | The two are unrelated and were once identically named; the verb reaches nothing, `administered_by` feeds `organizational_unit.admin`. ADR-102 |
+| 12  | Give `may_read_member_data` a path "because it is granted"       | The grant records an authority the platform declines to implement. Real access is a `CrossTenantGrant`. ADR-102                               |
 
 Each of these has an ADR and a test. If a change requires one of them, the
 change is wrong — or the ADR needs superseding first, deliberately, in this
