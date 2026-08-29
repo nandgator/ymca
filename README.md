@@ -1,89 +1,138 @@
-# YMCA Mess Management
+# YMCA Platform
 
-Digitalizes a YMCA hostel's paper mess register. Members currently write
-what they had for breakfast/dinner in a notebook every day (mandatory
-unless on registered leave); a staff member manually tallies it by hand at
-month end. This replaces that with a small mobile app and a backend that
-computes the bill.
+A centralized-yet-sovereign, multi-tenant platform for federated membership
+organizations, developed against the YMCA movement as the reference domain.
 
-**Start with [`CONTEXT.md`](./CONTEXT.md)** — the domain glossary every
-other file in this repo is built against. If a naming choice or a rule
-anywhere in the code looks arbitrary, it's answered there.
+Each association owns its people, money and facilities outright. No national
+or global body may reach into another records by virtue of sitting above it
+on an org chart — yet standards genuinely flow downward, compliance is
+enforced, and one person may belong to several associations at once. The
+platform serves all of this without becoming either a surveillance system or
+a pile of disconnected single-tenant deployments.
+
+## Start here
+
+**The design is written; the implementation is not.**
+[`docs/system-design/`](./docs/system-design/) is the full architecture
+description (arc42 + C4 + ADRs + DDD). Read it before writing code:
+
+| Read                                                                                                                                                 | If you are                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [`docs/system-design/04_solution_strategy.md`](./docs/system-design/04_solution_strategy.md)                                                         | **everyone — start here**                         |
+| [`docs/system-design/12_glossary.md`](./docs/system-design/12_glossary.md)                                                                           | reading anything else — the vocabulary is binding |
+| [`docs/system-design/05_building_block_view/`](./docs/system-design/05_building_block_view/)                                                         | implementing a context                            |
+| [`docs/system-design/08_crosscutting_concepts.md`](./docs/system-design/08_crosscutting_concepts.md)                                                 | touching auth, tenancy, data, or audit            |
+| [`docs/system-design/A1_openfga_schema.md`](./docs/system-design/A1_openfga_schema.md) · [`A2_data_model.md`](./docs/system-design/A2_data_model.md) | implementing authorization or persistence         |
+
+## The five principles
+
+Every decision in the design descends from these. If a change violates one,
+the change is wrong, not the principle.
+
+1. **Tenancy is an immutable security boundary.** Every protected object
+   belongs to a tenant; no authorization path resolves without a tenant in
+   it. Cross-tenant authority exists only as an explicit, time-bounded,
+   audited grant.
+2. **Organizational relationship is not authority.** Five independent graphs —
+   legal control, policy, compliance/sanction, administration, data access.
+   Being "above" another body implies nothing about what you may do to it.
+3. **Authorization answers entitlement; domain rules answer permission-now.**
+   _Is this person entitled at all?_ is OpenFGA. _May this happen right now?_
+   (suspended, full, window closed) is PostgreSQL and the policy engine.
+4. **Roles grant capabilities; relationships establish scope; attributes
+   supply context.** Role definitions may be global; role assignments are
+   always scoped.
+5. **Store the verdict, not the evidence.** Background checks, screening and
+   safeguarding restrictions record the outcome and its validity — never the
+   underlying record.
 
 ## Architecture
 
 ```
-┌────────────────────────┐        HTTPS          ┌──────────────────────────┐
-│  Mobile app (KMP +     │ ───────────────────▶ │  Caddy (reverse proxy,   │
-│  Compose Multiplatform)│                       │  automatic TLS)          │
-│  Android + iOS,        │                       └────────────┬─────────────┘
-│  one shared UI         │                                  │
-└────────────────────────┘                       ┌────────────▼─────────────┐
-                                               │  Go backend (chi router)  │
-                                               │  internal/domain — pure   │
-                                               │  billing/entry/leave logic│
-                                               │  internal/app — orchestr. │
-                                               │  internal/httpapi — routes│
-                                               └────────────┬─────────────┘
-                                                             │ pgx
-                                               ┌────────────▼─────────────┐
-                                               │       Postgres            │
-                                               └────────────────────────────┘
+                        Identity Provider (OIDC)
+                                 │ authenticated principal
+                                 ▼
+┌──────────────────────────────────────────────────────────────┐
+│                        API Gateway                           │
+│            tenant carried explicitly, never inferred         │
+└───────────────┬───────────────┬──────────────┬───────────────┘
+                ▼               ▼              ▼
+        ┌──────────────┐ ┌──────────────┐ ┌───────────┐
+        │   Domain     │ │Authorization │ │  Policy   │
+        │   Services   │─│   Service    │ │  Engine   │
+        │  (9 contexts)│ │              │ │           │
+        └──────┬───────┘ └──────┬───────┘ └───────────┘
+               ▼                ▼
+        ┌──────────────┐ ┌──────────────┐
+        │  PostgreSQL  │ │   OpenFGA    │
+        │ business     │─│ relationship │
+        │ state, RLS   │ | outbox graph │
+        └──────────────┘ └──────────────┘
 ```
 
-Every actor (Member, Secretary, CentralAdmin) uses the same mobile app —
-the UI branches by role after login, rather than shipping separate apps.
-Nobody self-registers; accounts are provisioned offline by a Secretary or
-CentralAdmin, and login is OTP-only (no passwords anywhere in the system).
+- **PostgreSQL** — system of record. Row-level security on `tenant_id`,
+  exclusion constraints for allocation exclusivity, gapless invoice
+  numbering. Business state only.
+- **OpenFGA** — Zanzibar-style relationship graph. One store per instance,
+  every object namespaced by tenant, every relation terminating at a tenant
+  ancestor. No PII in tuples.
+- **Transactional outbox** — the business mutation and its authorization
+  tuple write commit in one PostgreSQL transaction; a dispatcher reliably
+  applies to OpenFGA. Grants may lag (sub-second target); revocations are
+  written synchronously before they take effect.
+- **Policy engine** — policies are typed domain objects with known
+  semantics, evaluated by domain services. Not executable code in the
+  database.
+
+Domain services **never implement their own authorization rules** — they call
+`check(principal, permission, resource, context) → ALLOW | DENY`.
+
+### Bounded contexts
+
+Nine, each owning its data outright; none reaches into another's tables.
+Detailed in [`docs/system-design/05_building_block_view/`](./docs/system-design/05_building_block_view/).
+
+| Context      | Owns                                                  |
+| ------------ | ----------------------------------------------------- |
+| Organization | tenants, org units, affiliation, authority grants     |
+| Identity     | Person, principals, guardianship, consent             |
+| Membership   | plans, memberships, admission, entitlements           |
+| Programme    | programmes, offerings, enrollment, occurrences        |
+| Resource     | resources, windows, allocation, booking, stay         |
+| Governance   | offices, office holding, committees, decision records |
+| Policy       | policy definitions, inheritance, evaluation           |
+| Finance      | invoices, charges, payments, reconciliation           |
+| Safeguarding | verifications, clearances, restrictions               |
+
+Plus two crosscutting services: **Authorization** (owns the FGA model,
+answers `check`, holds no business state) and **Platform** (tenant
+provisioning, JIT privileged access, break-glass, platform audit).
+
+## Intended stack
+
+The design mandates only PostgreSQL and OpenFGA. The rest:
+
+| Component                                       | Stack                   |
+| ----------------------------------------------- | ----------------------- |
+| Domain / authorization / policy services (APIs) | Go                      |
+| Admin portal                                    | Flutter (web/desktop)   |
+| Member & staff mobile app                       | Flutter (Android + iOS) |
+| Authorization store                             | OpenFGA                 |
+| System of record                                | PostgreSQL              |
+| Identity                                        | external OIDC provider  |
+
+## Deployment
+
+Separate **regional platform instances** (IN, EU, US, …) answer data
+residency — instances share code and schema, not data. Within an instance:
+many tenants, one OpenFGA store, `Person` global to the instance. There is no
+cross-instance federation. See
+[`docs/system-design/07_deployment_view.md`](./docs/system-design/07_deployment_view.md).
 
 ## Repo layout
 
 ```
-CONTEXT.md          domain glossary — read this first
-backend/            Go API — see backend/README.md to run it
-mobile/              KMP + Compose Multiplatform app — see mobile/README.md
-deploy/              docker-compose (local + prod) and EC2 setup — see deploy/README.md
-docs/adr/            (empty — for architecture decision records if this grows)
+docs/system-design/   the architecture description — read this first
+prototype/            archived YMCA Mess Management prototype (Go + KMP)
+README.md             this file
 ```
-
-## Quick start (local)
-
-```bash
-cd deploy
-docker compose up --build
-```
-
-This starts Postgres + the backend, applying the schema and a demo
-hostel/admin/secretary/member on first boot. Then open `mobile/` in
-Android Studio and run it — it points at this local backend by default on
-the Android emulator. See `backend/README.md` for example curl commands
-(OTP login flow) and `mobile/README.md` for iOS setup.
-
-## Known caveats, honestly stated
-
-This was built in a sandboxed environment with **no network access** and
-**no Go/Gradle/Xcode toolchains available** to actually compile it. Every
-file was hand-reviewed for syntax and logic correctness instead of
-compiler-verified. Concretely, before treating this as production-ready:
-
-- **Backend**: run `cd backend && go mod tidy && go test ./...` — this
-  resolves dependencies (generates `go.sum`, not shipped since it needs
-  network) and runs the domain layer's unit tests (billing math, entry
-  locking, leave classification). One real bug was already caught this way
-  during writing (see `/areas/ymca-mess-monorepo.md` build notes if
-  you're a future Claude session resuming this) — there may be others
-  `go vet`/`go build` would catch that manual review didn't.
-- **Mobile**: open `mobile/` in Android Studio and let Gradle sync — this
-  resolves the Kotlin/Compose/Ktor dependencies for the first time. Two
-  real generics bugs and one hardcoded-platform-URL bug were caught by
-  manual review during writing; Gradle/the Kotlin compiler may catch more.
-- **iOS**: needs a one-time manual Xcode project creation step — see
-  `mobile/README.md`. Deliberately not shipped as a hand-authored
-  `.xcodeproj`.
-- **OTP delivery**: wired to a console logger (prints codes to the backend
-  logs) rather than real email/SMS. Fine for testing, must be swapped
-  before onboarding real members — see `deploy/README.md` step 8.
-
-None of this changes the actual design decisions (domain model, API
-shapes, architecture) — it's specifically the "did every file typecheck"
-layer that a real toolchain needs to confirm.
