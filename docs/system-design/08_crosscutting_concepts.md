@@ -1,0 +1,429 @@
+# 08 — Crosscutting Concepts
+
+Patterns that appear in several contexts and must be implemented identically
+in each. Where a context deviates, its subsection says so explicitly.
+
+---
+
+## 8.1 Authorization
+
+### The check interface
+
+```txt
+check(principal, permission, resource, context) → ALLOW | DENY
+```
+
+Domain services never implement authorization rules. They ask. A service
+containing `if user.role == "admin"` is a defect regardless of whether the
+condition is correct.
+
+### The three-part decision
+
+```txt
+1  TENANT       is there a tenant ancestor on the path?     mandatory
+2  GRAPH        does a relationship or role reach this?     OpenFGA
+3  VALIDITY     is that relationship currently effective?   PostgreSQL
+```
+
+Part 3 covers term windows, clearance validity, and restrictions. It exists
+because temporal state in the graph would require rewriting tuples on a
+clock, making expiry dependent on a sweeper.
+
+### Permission naming
+
+```txt
+<object>.<verb>
+
+membership.approve      resource.close      finance.refund
+member.read             booking.cancel      safeguarding.read
+```
+
+Permissions are system-defined and immutable (ADR-076). Roles bundle them and
+are tenant-configurable.
+
+### What is never in the graph
+
+```txt
+NOT IN OPENFGA
+    membership suspension          business state
+    booking, stay, allocation      business state with periods
+    clearance validity             temporal, sweeper-dependent
+    invoice contents               business state
+    policy values                  domain evaluation
+    PII of any kind                ADR-030
+```
+
+The rule: **if it changes for business reasons, it is not authority.**
+
+---
+
+## 8.2 Tenancy
+
+### Enforced at four layers
+
+```txt
+API          tenant carried explicitly in the request, never inferred
+             from a resource lookup
+AUTHZ        no relation resolves without a tenant ancestor
+SERVICE      tenant boundary checked independently of authorization
+DATABASE     row-level security on tenant_id
+```
+
+Independence is the point. An authorization defect alone must not be
+sufficient to expose another tenant's rows.
+
+### Row-level security
+
+```sql
+ALTER TABLE <table> ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON <table>
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+```
+
+`app.tenant_id` is set per transaction from the authenticated request context
+and never from user input.
+
+**Tables exempt from RLS**, and why:
+
+```txt
+person              global by design (05.2.2); visibility is
+                    controlled by relationship, not by row
+guardianship        global; concerns two humans, not a tenant
+principal           global; belongs to a person
+restriction         may be platform-wide (05.9.9)
+```
+
+Each exemption is deliberate, listed here so the set is auditable, and
+protected by application-level relationship checks instead.
+
+### The two cross-tenant flows
+
+Only two exist. Both are explicit, audited, and time-bounded where possible:
+
+```txt
+CrossTenantGrant           05.1.6   scoped, expiring, reasoned
+Platform-wide restriction  05.9.9   safeguarding, platform authority
+```
+
+Any third would be a change to Principle 1 and belongs in this document
+before it belongs in code.
+
+---
+
+## 8.3 Consistency
+
+### The asymmetry
+
+```txt
+GRANTS may lag        outbox dispatch, sub-second target
+REVOCATIONS may not   synchronous write before commit
+```
+
+### Grant path
+
+```txt
+BEGIN
+  business mutation
+  INSERT INTO authorization_outbox (...)
+COMMIT
+        ↓  dispatcher
+    OpenFGA
+```
+
+### Revocation path
+
+```txt
+BEGIN
+  mark revoked in PostgreSQL
+  DELETE tuple from OpenFGA        ← synchronous, before commit
+  if delete fails → ROLLBACK, report failure
+COMMIT
+```
+
+The failure mode is "revocation did not happen and you were told," never
+"revocation appeared to succeed but authority persisted."
+
+### Operations requiring synchronous revocation
+
+```txt
+role assignment revoked        membership suspended / lapsed / terminated
+office vacated                 dependent removed
+clearance lapsed               subscription lapsed
+restriction imposed            authority verb revoked
+affiliation sanctioned         cross-tenant grant expired
+guardianship ended             consent withdrawn
+principal suspended            committee membership removed
+```
+
+### Outbox
+
+```txt
+authorization_outbox
+    id, aggregate_type, aggregate_id, event_type, payload,
+    created_at, dispatched_at, attempts, last_error
+```
+
+At-least-once delivery. Tuple writes are idempotent, so redelivery is safe.
+Undispatched rows older than a threshold are an operational alert — a
+silently stalled dispatcher means authority is not being granted.
+
+---
+
+## 8.4 Snapshotting
+
+A pattern that emerged independently in three contexts and should be applied
+uniformly.
+
+> **When a person agrees to terms, capture the terms. Do not reference them.**
+
+```txt
+Enrollment.price_snapshot            05.4.5
+Booking.cancellation_policy_id       05.5.5   snapshot, not a live reference
+Invoice.tax_snapshot                 05.8.4
+Membership.plan                      versioned, never edited in place
+```
+
+The general rule: a tenant changing its terms must never retroactively alter
+what someone already accepted. Any future field that participates in an
+agreement between the association and a person is a snapshot candidate.
+
+**Distinguish from history.** Snapshotting captures what was agreed;
+versioning (plans, policies, offerings) captures what was published. Both are
+needed and they are not the same mechanism.
+
+---
+
+## 8.5 Audit
+
+### What is always audited
+
+```txt
+Every authorization decision that DENIES
+Every privileged access grant and every action within it
+Every role, office, or authority change
+Every restriction read, imposition, or lifting
+Every financial mutation
+Every policy definition or binding change
+Every cross-tenant operation
+```
+
+### Record shape
+
+```txt
+AuditEvent
+    id
+    tenant_id             nullable for platform-plane events
+    actor_principal_id
+    delegated_identity_id nullable — impersonation (ADR-068)
+    action
+    object_type, object_id
+    outcome               ALLOWED | DENIED | ERROR
+    severity              INFO | NOTABLE | HIGH
+    context               request id, source, JIT grant reference
+    occurred_at
+```
+
+**Both principals, always.** Under impersonation the record shows
+`actor = Bob, delegated_identity = Alice`. A record showing only one is
+forensically useless.
+
+### High severity
+
+```txt
+break-glass invocation and every action within it
+restriction imposed or lifted
+affiliation sanction
+role definition edited (with blast radius)
+cross-tenant grant created
+platform-wide restriction
+payment reversed
+```
+
+High-severity events route to a separate stream with independent retention
+and alerting.
+
+### Audit is append-only
+
+No update, no delete. Retention is longer than every other data class and
+survives `SCRUBBED` persons — the trail must outlive the personal data it
+references, which is why audit records hold identifiers rather than names.
+
+---
+
+## 8.6 Data protection
+
+### Storage rules
+
+```txt
+NEVER STORED
+    criminal record content, offence details
+    registry match content
+    allegation narratives, investigation material
+    special-category attributes as Person fields
+    PII in authorization tuples
+
+STORED AS VERDICT ONLY
+    background clearance      status, provider, dates
+    registry screening        match / no-match
+    compliance attestation    status, standard, period
+```
+
+### Erasure
+
+Implemented as `SCRUBBED`, not `DELETE`. Personal fields nulled; structural
+references and audit preserved.
+
+**Known tension, recorded rather than resolved:** erasure rights conflict
+with safeguarding and financial retention obligations. The design preserves
+audit and structure by default and expects tenants to configure retention per
+jurisdiction. See 11.
+
+### Consent
+
+Purpose is enumerated, never free text — free-text purposes cannot be
+reasoned about at query time and make "what has this guardian agreed to?"
+unanswerable. Withdrawal preserves the record, since it is the evidence that
+prior processing was lawful.
+
+### Minors
+
+```txt
+consent required from a verified guardian
+communications route to the guardian by default
+records visible to guardians and operational role-holders only
+optional fields collected only against a stated purpose
+age of majority read from Tenant.jurisdiction, never hard-coded
+```
+
+---
+
+## 8.7 Time and scheduling
+
+### Storage
+
+All timestamps `timestamptz`, stored UTC. All ranges `tstzrange`.
+
+### Display
+
+Rendered in the **resource's** timezone, not the viewer's. A member in
+Bengaluru booking a Mumbai pool sees Mumbai time. Booking systems that render
+in viewer-local time produce a class of error that is easy to create and hard
+to detect.
+
+### Expiry
+
+```txt
+Evaluated at decision time, never by a sweeper.
+```
+
+Applies to terms, clearances, verifications, consent, JIT grants and
+cross-tenant grants. Sweepers exist only for notification and cleanup — never
+for enforcement.
+
+### Notification before silent expiry
+
+```txt
+OfficeTermExpiring         90 / 30 / 7 days
+VerificationExpiring       60 / 30 / 7 days
+MembershipExpiring         60 / 30 / 7 days
+```
+
+Decision-time enforcement is correct but abrupt. Discovering at 00:01 that
+authority has ended is the right behaviour and a bad experience.
+
+---
+
+## 8.8 Errors
+
+### Denial must be specific
+
+```txt
+WRONG    "Access denied"
+
+RIGHT    entitlement    "A pool subscription is required"
+         availability   "That session is full"
+         window         "Booking closes 2 hours before the session"
+         suspension     "Your membership is currently suspended"
+         clearance      "An active clearance is required for this role"
+```
+
+The two-question split (Principle 3) exists partly so these produce different
+messages. Collapsing them wastes the distinction the architecture paid for.
+
+### Denial must not leak
+
+```txt
+Never reveal     that a person exists in another tenant
+                 the contents or existence of a restriction to
+                 anyone but authorized readers
+                 why an application was rejected (05.3.4)
+                 which specific registry matched
+```
+
+Where specificity and non-disclosure conflict, non-disclosure wins and the
+event is audited.
+
+---
+
+## 8.9 Idempotency
+
+```txt
+Tuple writes            naturally idempotent
+Outbox dispatch         at-least-once; consumers must tolerate redelivery
+Payment webhooks        untrusted, verified, deduplicated by provider
+                        reference, reconciled against a provider query
+Allocation inserts      the exclusion constraint makes retry safe
+Invoice numbering       NOT idempotent — allocation must be
+                        concurrency-safe (see 05.8.13)
+```
+
+---
+
+## 8.10 Configuration versus code
+
+```txt
+CODE                       CONFIGURATION
+─────────────────────────────────────────────────────
+permissions                roles
+policy types               policy definitions and bindings
+resource archetypes        resource types
+FGA model                  tuples
+plan machinery             plans, prices, entitlement bundles
+state machines             approval routing
+tax interface              tax treatments
+```
+
+Adding a policy type or a permission is a platform release. That friction is
+deliberate: it forces someone to define the semantics before tenants can
+depend on them.
+
+---
+
+## 8.11 Testing
+
+The invariants from 04.9 are testable and should be tested as explicit
+negative cases:
+
+```txt
+1   no permission resolves without a tenant ancestor
+2   a body with may_sanction cannot read the sanctioned tenant's data
+3   no authority verb grants another
+4   negative scoping cannot be expressed
+5   a role assignment without scope is rejected
+6   an expired term denies at decision time, with no sweeper run
+7   an expired clearance denies at decision time
+8   a lapsed suspension is a row, not a computation over invoices
+9   platform administration alone reaches no tenant object
+10  no permission fails open
+```
+
+Test 2 is the sharpest: a national body with every authority verb except
+`may_read_member_data` must be denied every path to a member record. It is
+the single test that proves the design's central claim.
+
+### Model testing
+
+The FGA model is a versioned artifact with its own test suite —
+assertion-based tuple tests run in CI, and no model change ships without
+them.
