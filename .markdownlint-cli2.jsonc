@@ -1,0 +1,7 @@
+{
+  "config": {
+    "MD013": false, // tables blow past any line length
+    "MD024": { "siblings_only": true }
+  },
+  "ignores": ["prototype/**", "node_modules/**"]
+}
