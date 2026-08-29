@@ -1,0 +1,309 @@
+model
+  schema 1.1
+
+# ─────────────────────────────────────────────────────────────
+# PLATFORM PLANE
+# Separate from the tenant plane. Neither implies the other.
+# ADR-005
+# ─────────────────────────────────────────────────────────────
+
+type platform
+  relations
+    define operator: [principal]
+    define security_admin: [principal]
+    define support: [principal]
+    define auditor: [principal]
+
+    # Platform authority over tenants is limited to lifecycle
+    # and configuration. It confers NO tenant-data access.
+    define may_provision_tenant: operator
+    define may_suspend_tenant: operator or security_admin
+    define may_read_platform_audit: auditor or security_admin
+
+
+# ─────────────────────────────────────────────────────────────
+# SUBJECTS
+# ─────────────────────────────────────────────────────────────
+
+type person
+  relations
+    define principal: [principal]
+    # The only Person -> Person relation in the model. ADR-042
+    define guardian: [person]
+
+type principal
+  relations
+    define person: [person]
+
+
+# ─────────────────────────────────────────────────────────────
+# TENANT — the root of every authorization path
+# ADR-004, ADR-018
+# ─────────────────────────────────────────────────────────────
+
+type tenant
+  relations
+    define owner: [principal]
+    define admin: [principal] or owner
+    define member: [principal] or admin
+
+    # Break-glass and JIT access land here, on the ELEVATED
+    # principal only, always with an expiry enforced in
+    # PostgreSQL. ADR-066, ADR-067
+    define jit_grantee: [principal]
+
+    define finance_reader: [principal] or admin
+    define safeguarding_reader: [principal]
+
+    # Internal administration of this tenant, by its own admins or
+    # by break-glass. NOT the cross-tenant authority verb of the
+    # same sense in 05.1.5 — that one is granted on `affiliation`
+    # and reaches nothing. Named apart so the two cannot be
+    # confused by a later edit. ADR-102
+    define administered_by: admin or jit_grantee
+
+
+# ─────────────────────────────────────────────────────────────
+# ORGANIZATIONAL UNIT
+# auth_parent is the DAG edge. It is NOT derived from
+# org_parent — see 05.1.3. ADR-016, ADR-095
+# ─────────────────────────────────────────────────────────────
+
+type organizational_unit
+  relations
+    define tenant: [tenant]
+
+    # Multiple parents permitted. Union over all paths.
+    define auth_parent: [organizational_unit, tenant]
+
+    define admin: [principal] or admin from auth_parent or administered_by from tenant
+
+    define member: [principal] or member from auth_parent
+
+    define staff: [principal]
+
+    # Per-permission propagation. ADR-014
+    # member_read reaches descendants; unit_close does not.
+    define member_read: [principal] or member_read from auth_parent or admin
+    define unit_close: [principal] or admin
+
+
+# ─────────────────────────────────────────────────────────────
+# AFFILIATION — a first-class object, not a relation on tenant.
+#
+# This is what makes sanction authority structurally incapable
+# of reaching tenant data. ADR-009, ADR-073, ADR-074
+# ─────────────────────────────────────────────────────────────
+
+type affiliation
+  relations
+    define from_tenant: [tenant]
+    define to_tenant: [tenant]
+
+    # Granted ON the affiliation. There is no path from any of
+    # these to to_tenant's members, resources or finances.
+    define may_set_policy: [principal]
+    define may_review_compliance: [principal]
+    define may_sanction: [principal]
+
+    # The two reaching verbs. Recorded, never graph-bearing: they
+    # are grantable so that holding them is auditable, and they
+    # resolve to nothing. Real administration or data access goes
+    # through cross_tenant_grant — scoped, reasoned, expiring.
+    # Their inertness is enforced by the A1.7 assertions, not by
+    # anyone remembering this comment. ADR-102
+    define may_administer: [principal]
+    define may_read_member_data: [principal]
+
+    define viewer: admin from from_tenant or admin from to_tenant
+
+
+# ─────────────────────────────────────────────────────────────
+# CROSS-TENANT GRANT
+# The single sanctioned exception to Principle 1. Always
+# scoped to one object, always expiring. ADR-019
+# ─────────────────────────────────────────────────────────────
+
+type cross_tenant_grant
+  relations
+    define grantor_tenant: [tenant]
+    define grantee: [principal, organizational_unit#staff]
+    define scope_object: [organizational_unit, resource, programme]
+    define active: grantee
+
+
+# ─────────────────────────────────────────────────────────────
+# ROLES
+# Definitions may be global; assignments are always scoped.
+# ADR-011, ADR-022, ADR-076, ADR-079
+# ─────────────────────────────────────────────────────────────
+
+type role_definition
+  relations
+    define tenant: [tenant]
+    define editor: admin from tenant
+
+type role_assignment
+  relations
+    define definition: [role_definition]
+    define subject: [principal]
+    define scope: [organizational_unit, resource, programme, tenant]
+    # Effectiveness — term window, clearance — is resolved in
+    # PostgreSQL. ADR-069, ADR-070, ADR-087
+    define holder: subject
+
+
+# ─────────────────────────────────────────────────────────────
+# OFFICE — constitutional position. Confers roles; is not one.
+# ADR-071, ADR-072
+# ─────────────────────────────────────────────────────────────
+
+type office
+  relations
+    define tenant: [tenant]
+    define org_unit: [organizational_unit]
+    define holder: [principal]
+    define confers: [role_definition]
+    define appointer: admin from tenant
+
+type committee
+  relations
+    define tenant: [tenant]
+    define org_unit: [organizational_unit]
+    define chair: [principal]
+    define member: [principal] or chair or holder from ex_officio_office
+    define ex_officio_office: [office]
+
+
+# ─────────────────────────────────────────────────────────────
+# MEMBERSHIP AND ENTITLEMENT
+# The membership record itself lives in PostgreSQL. What lives
+# here is who it covers and what it grants. ADR-024, ADR-057
+# ─────────────────────────────────────────────────────────────
+
+type membership
+  relations
+    define tenant: [tenant]
+    define holder: [person]
+    define dependent: [person]
+    define covered: holder or dependent
+    define plan: [membership_plan]
+
+type membership_plan
+  relations
+    define tenant: [tenant]
+    define grants_bundle: [entitlement_bundle]
+
+type subscription
+  relations
+    define membership: [membership]
+    define beneficiary: covered from membership
+    define grants_bundle: [entitlement_bundle]
+
+type entitlement_bundle
+  relations
+    define tenant: [tenant]
+    # Every route by which a person holds this bundle.
+    define via_plan: [membership_plan#grants_bundle]
+    define via_subscription: [subscription]
+    define beneficiary: [person] or beneficiary from via_subscription
+
+
+# ─────────────────────────────────────────────────────────────
+# RESOURCE
+# Bookings, stays and allocations are NOT here. They are
+# business state with periods. ADR-024, ADR-058
+# ─────────────────────────────────────────────────────────────
+
+type resource
+  relations
+    define tenant: [tenant]
+    define org_unit: [organizational_unit]
+    define auth_parent: [organizational_unit, resource]
+
+    define manager: [principal] or admin from auth_parent
+    define entitled: [entitlement_bundle#beneficiary]
+
+    define may_use: entitled or manager
+    define may_book: entitled or manager
+    define may_close: manager
+
+
+# ─────────────────────────────────────────────────────────────
+# PROGRAMME
+# ─────────────────────────────────────────────────────────────
+
+type programme
+  relations
+    define tenant: [tenant]
+    define org_unit: [organizational_unit]
+    define manager: [principal] or admin from org_unit
+    define instructor: [principal]
+    define entitled: [entitlement_bundle#beneficiary]
+    define open_to_public: [person:*]
+
+    define may_enrol: entitled or open_to_public
+    define may_manage: manager
+
+type offering
+  relations
+    define programme: [programme]
+    define may_manage: may_manage from programme
+    define may_enrol: may_enrol from programme
+
+
+# ─────────────────────────────────────────────────────────────
+# CONSUMPTION — entitlement only. Records, obligations and
+# absences are business state. ADR-096, ADR-097
+# ─────────────────────────────────────────────────────────────
+
+type consumption_type
+  relations
+    define tenant: [tenant]
+    define auth_parent: [organizational_unit, resource]
+
+    define manager: [principal] or admin from auth_parent
+    define entitled: [entitlement_bundle#beneficiary]
+
+    # Self-service recording follows entitlement, exactly as
+    # resource use does. Recording FOR someone else is staff work.
+    define may_record: entitled or manager
+    define may_record_for_other: [principal] or manager
+    define may_correct: [principal] or manager
+    define may_read: [principal] or manager
+    define may_close_period: manager
+
+
+# ─────────────────────────────────────────────────────────────
+# FINANCE — permissions are ordinary roles. Contents are not
+# tuples. ADR-082
+# ─────────────────────────────────────────────────────────────
+
+type invoice
+  relations
+    define tenant: [tenant]
+    define payer: [person, organizational_unit]
+    define viewer: payer or finance_reader from tenant
+
+
+# ─────────────────────────────────────────────────────────────
+# SAFEGUARDING — only the restriction is here, and only so
+# that reading it can be gated. ADR-089
+# ─────────────────────────────────────────────────────────────
+
+type restriction
+  relations
+    define subject: [person]
+    define tenant: [tenant]
+    define viewer: subject or safeguarding_reader from tenant
+
+
+# ─────────────────────────────────────────────────────────────
+# POLICY
+# ─────────────────────────────────────────────────────────────
+
+type policy_definition
+  relations
+    define owner_tenant: [tenant]
+    define editor: admin from owner_tenant
+    define binder: [principal]

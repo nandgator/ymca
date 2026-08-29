@@ -1,0 +1,355 @@
+# A1.7 — the authorization model's test suite.
+#
+# Source of truth: docs/system-design/A1_openfga_schema.md §A1.6 (tuples) and
+# §A1.7 (assertions). This file is those two sections made executable. It runs
+# in CI; a failure blocks the change (A1.8 rule 4).
+#
+# The assertions below are A1.7 in order, with two changes and one addition,
+# each marked inline:
+#
+#   TYPED     A1.7 writes subjects bare — `alice`, `natl-sec`. The model does
+#             not: `resource.may_use` reaches a `person` through an
+#             entitlement bundle, while `organizational_unit.member_read`
+#             takes a `principal` directly. The same bare name is two
+#             different subjects depending on the relation. Spelled out here
+#             because a check cannot be run without it.
+#
+#   FIXTURE   Tuples A1.6 does not list, without which an A1.7 assertion
+#             cannot resolve. See DEFECT-1 below.
+#
+#   ADDED     Positive assertions that are not in A1.7. Each exists to prove
+#             that a neighbouring DENY is not vacuous. A negative test against
+#             an empty fixture passes for the wrong reason, which is exactly
+#             the weakness REVIEW.md §2 found in 8.12 test 2.
+#
+# ── DEFECT-1 · A1.6's tuples cannot satisfy A1.7's first assertion ──────────
+#
+# A1.6 lists, for Alice's pool entitlement:
+#
+#     subscription:sub-77 membership    membership:m-123
+#     subscription:sub-77 grants_bundle entitlement_bundle:pool-access
+#     resource:bombay/procter-pool entitled entitlement_bundle:pool-access#beneficiary
+#
+# But `entitlement_bundle.beneficiary` resolves through
+# `beneficiary from via_subscription`, and `via_subscription` is a relation
+# ON the bundle. Nothing reads `subscription.grants_bundle`. The tuple that
+# makes Alice a beneficiary — `entitlement_bundle:pool-access via_subscription
+# subscription:sub-77` — is absent from A1.6, and `membership:m-123 holder
+# person:alice` is absent too.
+#
+# Both are supplied below and marked FIXTURE. A1.6 should gain them.
+#
+# ── DEFECT-2 · `entitlement_bundle.via_plan` is unreachable ────────────────
+#
+#     define via_plan: [membership_plan#grants_bundle]
+#     define beneficiary: [person] or beneficiary from via_subscription
+#
+# `beneficiary` never mentions `via_plan`, so a bundle granted by a
+# membership plan entitles nobody. Every entitlement must be routed through
+# a `subscription` object, including one that exists only to carry the plan's
+# own bundle. `membership_plan.entitlement_bundle_id` in A2.4 implies the
+# other reading.
+#
+# This is not worked around here. The fixture routes everything through
+# subscriptions, which is what the model as written requires. Recorded so the
+# slice does not discover it while wiring admission.
+
+# ─────────────────────────────────────────────────────────────
+# FIXTURE
+# ─────────────────────────────────────────────────────────────
+
+tuples:
+  # ── Platform plane ────────────────────────────────────────
+  - { user: "principal:platform-op", relation: "operator", object: "platform:main" }
+
+  # ── Bombay · the authorization DAG ────────────────────────
+  - { user: "tenant:bombay", relation: "tenant", object: "organizational_unit:bombay" }
+  - { user: "tenant:bombay", relation: "tenant", object: "organizational_unit:bombay/procter" }
+  - { user: "organizational_unit:bombay", relation: "auth_parent", object: "organizational_unit:bombay/procter" }
+  - { user: "tenant:bombay", relation: "tenant", object: "organizational_unit:bombay/procter/sub-unit" }
+  - { user: "organizational_unit:bombay/procter", relation: "auth_parent", object: "organizational_unit:bombay/procter/sub-unit" }
+  - { user: "tenant:bombay", relation: "tenant", object: "organizational_unit:bombay/pe-dept" }
+  - { user: "organizational_unit:bombay", relation: "auth_parent", object: "organizational_unit:bombay/pe-dept" }
+
+  # ── Bombay · principals ───────────────────────────────────
+  - { user: "principal:alice", relation: "member", object: "tenant:bombay" }
+  - { user: "principal:alice", relation: "member_read", object: "organizational_unit:bombay/procter" }
+  - { user: "principal:procter-admin", relation: "admin", object: "organizational_unit:bombay/procter" }
+  # Held at the tenant-level unit, so that the unit_close DENY below tests
+  # per-permission propagation (ADR-014) rather than an absent grant.
+  - { user: "principal:bombay-secretary", relation: "member_read", object: "organizational_unit:bombay" }
+  - { user: "principal:warden", relation: "may_record_for_other", object: "consumption_type:bombay/dinner" }
+  - { user: "principal:pe-head", relation: "manager", object: "resource:bombay/procter-pool" }
+  - { user: "principal:bombay-finance", relation: "finance_reader", object: "tenant:bombay" }
+  # Break-glass, on the ELEVATED principal. Expiry lives in PostgreSQL.
+  - { user: "principal:bob-elevated", relation: "jit_grantee", object: "tenant:bombay" }
+
+  # ── Bombay · Alice's membership and entitlements ──────────
+  - { user: "principal:alice", relation: "principal", object: "person:alice" }
+  - { user: "tenant:bombay", relation: "tenant", object: "membership:m-123" }
+  # FIXTURE — absent from A1.6. Without it nothing makes Alice a beneficiary.
+  - { user: "person:alice", relation: "holder", object: "membership:m-123" }
+
+  - { user: "tenant:bombay", relation: "tenant", object: "entitlement_bundle:pool-access" }
+  - { user: "membership:m-123", relation: "membership", object: "subscription:sub-77" }
+  # A1.6 lists this. Nothing in the model reads it — see DEFECT-2's neighbour.
+  # Kept so the fixture matches A1.6 rather than silently improving on it.
+  - { user: "entitlement_bundle:pool-access", relation: "grants_bundle", object: "subscription:sub-77" }
+  # FIXTURE — absent from A1.6. This is the tuple that actually entitles.
+  - { user: "subscription:sub-77", relation: "via_subscription", object: "entitlement_bundle:pool-access" }
+
+  - { user: "tenant:bombay", relation: "tenant", object: "entitlement_bundle:mess-access" }
+  - { user: "membership:m-123", relation: "membership", object: "subscription:sub-88" }
+  - { user: "entitlement_bundle:mess-access", relation: "grants_bundle", object: "subscription:sub-88" }
+  - { user: "subscription:sub-88", relation: "via_subscription", object: "entitlement_bundle:mess-access" }
+
+  # ── Bombay · resource, with two authorization parents ─────
+  - { user: "tenant:bombay", relation: "tenant", object: "resource:bombay/procter-pool" }
+  - { user: "organizational_unit:bombay/procter", relation: "auth_parent", object: "resource:bombay/procter-pool" }
+  - { user: "organizational_unit:bombay/pe-dept", relation: "auth_parent", object: "resource:bombay/procter-pool" }
+  - { user: "entitlement_bundle:pool-access#beneficiary", relation: "entitled", object: "resource:bombay/procter-pool" }
+
+  # ── Bombay · consumption ──────────────────────────────────
+  - { user: "tenant:bombay", relation: "tenant", object: "consumption_type:bombay/dinner" }
+  - { user: "organizational_unit:bombay/procter", relation: "auth_parent", object: "consumption_type:bombay/dinner" }
+  - { user: "entitlement_bundle:mess-access#beneficiary", relation: "entitled", object: "consumption_type:bombay/dinner" }
+
+  # ── Bombay · finance ──────────────────────────────────────
+  - { user: "tenant:bombay", relation: "tenant", object: "invoice:bombay/inv-1" }
+
+  # ── The affiliation india → bombay ────────────────────────
+  # natl-sec holds ALL FIVE authority verbs. This is the strong form of
+  # invariant 2: not a body with one verb, but a body with every verb,
+  # still reaching nothing.
+  - { user: "tenant:india", relation: "from_tenant", object: "affiliation:india-bombay" }
+  - { user: "tenant:bombay", relation: "to_tenant", object: "affiliation:india-bombay" }
+  - { user: "principal:natl-sec", relation: "may_set_policy", object: "affiliation:india-bombay" }
+  - { user: "principal:natl-sec", relation: "may_review_compliance", object: "affiliation:india-bombay" }
+  - { user: "principal:natl-sec", relation: "may_sanction", object: "affiliation:india-bombay" }
+  - { user: "principal:natl-sec", relation: "may_administer", object: "affiliation:india-bombay" }
+  - { user: "principal:natl-sec", relation: "may_read_member_data", object: "affiliation:india-bombay" }
+
+  # ── Pune · a second real tenant ───────────────────────────
+  # Fully populated on purpose. Invariant 1 is about Alice failing to reach
+  # something that genuinely exists and that a Pune member genuinely reaches.
+  - { user: "tenant:pune", relation: "tenant", object: "organizational_unit:pune/central" }
+  - { user: "principal:priya", relation: "member_read", object: "organizational_unit:pune/central" }
+  - { user: "principal:priya", relation: "principal", object: "person:priya" }
+  - { user: "tenant:pune", relation: "tenant", object: "membership:pune-m-1" }
+  - { user: "person:priya", relation: "holder", object: "membership:pune-m-1" }
+  - { user: "tenant:pune", relation: "tenant", object: "entitlement_bundle:pune-access" }
+  - { user: "membership:pune-m-1", relation: "membership", object: "subscription:pune-sub-1" }
+  - { user: "subscription:pune-sub-1", relation: "via_subscription", object: "entitlement_bundle:pune-access" }
+  - { user: "tenant:pune", relation: "tenant", object: "resource:pune/central-pool" }
+  - { user: "organizational_unit:pune/central", relation: "auth_parent", object: "resource:pune/central-pool" }
+  - { user: "entitlement_bundle:pune-access#beneficiary", relation: "entitled", object: "resource:pune/central-pool" }
+  - { user: "tenant:pune", relation: "tenant", object: "consumption_type:pune/dinner" }
+  - { user: "entitlement_bundle:pune-access#beneficiary", relation: "entitled", object: "consumption_type:pune/dinner" }
+
+# ─────────────────────────────────────────────────────────────
+# ASSERTIONS
+# ─────────────────────────────────────────────────────────────
+
+assertions:
+  # ── A1.7 · Must ALLOW ─────────────────────────────────────
+
+  - name: "alice may_use the Procter pool"
+    user: "person:alice" # TYPED: entitlement reaches a person, not a principal
+    relation: "may_use"
+    object: "resource:bombay/procter-pool"
+    expect: true
+
+  - name: "alice may_record her own dinner"
+    user: "person:alice" # TYPED
+    relation: "may_record"
+    object: "consumption_type:bombay/dinner"
+    expect: true
+
+  - name: "the warden may record dinner for someone else"
+    user: "principal:warden"
+    relation: "may_record_for_other"
+    object: "consumption_type:bombay/dinner"
+    expect: true
+
+  - name: "alice may read members at Procter"
+    user: "principal:alice" # TYPED: member_read takes a principal
+    relation: "member_read"
+    object: "organizational_unit:bombay/procter"
+    expect: true
+
+  - name: "member_read propagates down the DAG to a sub-unit"
+    user: "principal:alice" # TYPED
+    relation: "member_read"
+    object: "organizational_unit:bombay/procter/sub-unit"
+    expect: true
+
+  - name: "pe-head may close the pool as its direct manager"
+    user: "principal:pe-head"
+    relation: "may_close"
+    object: "resource:bombay/procter-pool"
+    expect: true
+
+  - name: "procter-admin may close the pool through auth_parent"
+    user: "principal:procter-admin"
+    relation: "may_close"
+    object: "resource:bombay/procter-pool"
+    expect: true
+
+  - name: "natl-sec may sanction the affiliation"
+    user: "principal:natl-sec"
+    relation: "may_sanction"
+    object: "affiliation:india-bombay"
+    expect: true
+
+  - name: "natl-sec holds may_administer ON the affiliation"
+    user: "principal:natl-sec"
+    relation: "may_administer"
+    object: "affiliation:india-bombay"
+    expect: true
+
+  - name: "break-glass reaches tenant administration"
+    user: "principal:bob-elevated"
+    relation: "administered_by"
+    object: "tenant:bombay"
+    expect: true
+
+  # ── ADDED · the fixture is real, so the DENYs below are not vacuous ──
+
+  - name: "ADDED — bombay-secretary DOES reach Procter for member_read"
+    user: "principal:bombay-secretary"
+    relation: "member_read"
+    object: "organizational_unit:bombay/procter"
+    expect: true
+
+  - name: "ADDED — a finance reader IS a viewer of the invoice"
+    user: "principal:bombay-finance"
+    relation: "viewer"
+    object: "invoice:bombay/inv-1"
+    expect: true
+
+  - name: "ADDED — a Pune member DOES reach the Pune pool"
+    user: "person:priya"
+    relation: "may_use"
+    object: "resource:pune/central-pool"
+    expect: true
+
+  # ── A1.7 · Invariant 2 — the central claim of the design ──
+  # natl-sec holds all five verbs and reaches nothing.
+
+  - name: "invariant 2 — no path to member records"
+    user: "principal:natl-sec"
+    relation: "member_read"
+    object: "organizational_unit:bombay/procter"
+    expect: false
+
+  - name: "invariant 2 — no path to resources"
+    user: "principal:natl-sec"
+    relation: "may_use"
+    object: "resource:bombay/procter-pool"
+    expect: false
+
+  - name: "invariant 2 — no path to finances"
+    user: "principal:natl-sec"
+    relation: "viewer"
+    object: "invoice:bombay/inv-1"
+    expect: false
+
+  - name: "invariant 2 — no path to unit administration"
+    user: "principal:natl-sec"
+    relation: "admin"
+    object: "organizational_unit:bombay/procter"
+    expect: false
+
+  - name: "invariant 2 — may_administer on the affiliation is NOT tenant administration"
+    user: "principal:natl-sec"
+    relation: "administered_by"
+    object: "tenant:bombay"
+    expect: false
+
+  - name: "invariant 2 — authority does not make you a member"
+    user: "principal:natl-sec"
+    relation: "member"
+    object: "tenant:bombay"
+    expect: false
+
+  - name: "invariant 2 — no path to finance reading"
+    user: "principal:natl-sec"
+    relation: "finance_reader"
+    object: "tenant:bombay"
+    expect: false
+
+  - name: "invariant 2 — no path to safeguarding"
+    user: "principal:natl-sec"
+    relation: "safeguarding_reader"
+    object: "tenant:bombay"
+    expect: false
+
+  - name: "invariant 2 — no path to recording consumption"
+    user: "principal:natl-sec"
+    relation: "may_record"
+    object: "consumption_type:bombay/dinner"
+    expect: false
+
+  # ── A1.7 · Invariant 9 — platform admin reaches no tenant object ──
+
+  - name: "invariant 9 — platform operator reads no member records"
+    user: "principal:platform-op"
+    relation: "member_read"
+    object: "organizational_unit:bombay/procter"
+    expect: false
+
+  - name: "invariant 9 — platform operator reads no invoices"
+    user: "principal:platform-op"
+    relation: "viewer"
+    object: "invoice:bombay/inv-1"
+    expect: false
+
+  - name: "invariant 9 — platform operator uses no resources"
+    user: "principal:platform-op"
+    relation: "may_use"
+    object: "resource:bombay/procter-pool"
+    expect: false
+
+  # ── A1.7 · Invariant 1 — no cross-tenant leakage ──
+
+  - name: "invariant 1 — alice does not reach the Pune pool"
+    user: "person:alice" # TYPED
+    relation: "may_use"
+    object: "resource:pune/central-pool"
+    expect: false
+
+  - name: "invariant 1 — alice does not read Pune members"
+    user: "principal:alice" # TYPED
+    relation: "member_read"
+    object: "organizational_unit:pune/central"
+    expect: false
+
+  - name: "invariant 1 — alice does not record Pune dinner"
+    user: "person:alice" # TYPED
+    relation: "may_record"
+    object: "consumption_type:pune/dinner"
+    expect: false
+
+  # ── A1.7 · Entitlement does not confer recording for others ──
+
+  - name: "entitlement is not authority over other people"
+    user: "principal:alice"
+    relation: "may_record_for_other"
+    object: "consumption_type:bombay/dinner"
+    expect: false
+
+  # ── A1.7 · Per-permission propagation (ADR-014) ──
+
+  - name: "unit_close does not propagate down the DAG"
+    user: "principal:bombay-secretary"
+    relation: "unit_close"
+    object: "organizational_unit:bombay/procter"
+    expect: false
+
+  # ── A1.7 · A personal principal holds no elevated authority ──
+
+  - name: "the personal principal is not the elevated one"
+    user: "principal:bob-personal"
+    relation: "administered_by"
+    object: "tenant:bombay"
+    expect: false
