@@ -33,6 +33,21 @@ type Config struct {
 
 	// HTTPAddr is the listen address for cmd/api.
 	HTTPAddr string
+
+	// AuthProvider names the Authenticator implementation to open (ADR-106,
+	// D2). There is no default: a service that silently picked a provider
+	// would be exactly the accident ADR-106's note requires be impossible.
+	// "dev" is only ever satisfiable by a binary built with -tags dev — see
+	// internal/auth.
+	AuthProvider string
+
+	// DevAuthSecret signs and verifies the dev provider's HS256 tokens
+	// (D3). Read here unconditionally, but only REQUIRED when AuthProvider
+	// is "dev" — that is a conditional requirement config.Load cannot
+	// express with its flat missing-var check, so internal/auth/dev
+	// enforces the minimum-length rule itself, at Authenticator
+	// construction time, which is still before the process starts serving.
+	DevAuthSecret string
 }
 
 // Load reads configuration from the environment. missing lists every absent
@@ -40,11 +55,13 @@ type Config struct {
 // everything it needs in one run.
 func Load() (Config, error) {
 	c := Config{
-		DatabaseURL: os.Getenv("YMCA_DATABASE_URL"),
-		FGAAPIURL:   os.Getenv("YMCA_FGA_API_URL"),
-		FGAStoreID:  os.Getenv("YMCA_FGA_STORE_ID"),
-		FGAModelID:  os.Getenv("YMCA_FGA_MODEL_ID"),
-		HTTPAddr:    envOr("YMCA_HTTP_ADDR", ":8000"),
+		DatabaseURL:   os.Getenv("YMCA_DATABASE_URL"),
+		FGAAPIURL:     os.Getenv("YMCA_FGA_API_URL"),
+		FGAStoreID:    os.Getenv("YMCA_FGA_STORE_ID"),
+		FGAModelID:    os.Getenv("YMCA_FGA_MODEL_ID"),
+		HTTPAddr:      envOr("YMCA_HTTP_ADDR", ":8000"),
+		AuthProvider:  os.Getenv("YMCA_AUTH_PROVIDER"),
+		DevAuthSecret: os.Getenv("YMCA_DEV_AUTH_SECRET"),
 	}
 
 	var missing []string
@@ -53,6 +70,9 @@ func Load() (Config, error) {
 	}
 	if c.FGAAPIURL == "" {
 		missing = append(missing, "YMCA_FGA_API_URL")
+	}
+	if c.AuthProvider == "" {
+		missing = append(missing, "YMCA_AUTH_PROVIDER")
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("config: required environment variables not set: %s",

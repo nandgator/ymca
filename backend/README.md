@@ -18,7 +18,14 @@ fga/model.fga              A1.2, reformatted (see below)
 fga/assertions.yaml        A1.6 fixture + A1.7 assertions, executable
 fga/embed.go               go:embed and the assertion parser
 cmd/fga/                   applies the model, runs the assertions
+cmd/api/                   the HTTP server, and GET /me
 internal/config/           environment configuration
+internal/db/               the pool, and the tenant transaction (8.2)
+internal/auth/             the ADR-106 port and its provider registry
+internal/auth/dev/         the development provider — //go:build dev only
+internal/authz/            6.1's three-step check, and the OpenFGA client
+internal/audit/            8.5's DENY record
+internal/httpx/            the middleware chain, A3.4's errors
 ```
 
 ## What §6 of the handoff planned and does not exist yet
@@ -26,8 +33,6 @@ internal/config/           environment configuration
 ```txt
 compose.yaml     not needed — postgres and openfga already run under podman
 Dockerfile       not needed until there is something to deploy
-cmd/api/         the HTTP server                          <- next
-internal/db  auth  authz  httpx
 internal/organization  identity  membership  consumption  finance
 ```
 
@@ -50,6 +55,8 @@ export YMCA_DATABASE_URL='postgres://ymca_api:<password>@localhost:5432/ymca?ssl
 export YMCA_FGA_API_URL='http://localhost:8080'
 export YMCA_FGA_STORE_ID='...'    # printed by `fga apply`
 export YMCA_FGA_MODEL_ID='...'    # printed by `fga apply`
+export YMCA_AUTH_PROVIDER='dev'   # no default; see The API, below
+export YMCA_DEV_AUTH_SECRET='...' # >= 32 bytes; only read by the dev provider
 ```
 
 `YMCA_DATABASE_URL` names two different roles depending on the command, and
@@ -95,6 +102,54 @@ writes the fixture and deletes the store afterwards, so a stale tuple from a
 previous run can never turn a DENY assertion into a pass. Any failure exits
 non-zero, as A1.8 rule 4 requires.
 
+### The API
+
+```sh
+go run ./cmd/api                 # serve on YMCA_HTTP_ADDR
+```
+
+One route so far, `GET /api/v1/t/{tenant}/me` (`A3.7`, `A3.9`): who the caller
+is, and which of four tenant-scoped permissions they hold. Each is a full 6.1
+check against the tenant named in the path — the endpoint reports no
+object-scoped permission, deliberately, because a `/me` that enumerated them
+would be the reverse index `ADR-104` and `8.11` exist to prevent.
+
+**The development authenticator is behind two independent gates** (`ADR-106`).
+It compiles only under `-tags dev`, and even then only starts when
+`YMCA_AUTH_PROVIDER` is exactly `dev`. There is no default: a binary built
+without the tag reports that this build has no dev provider, rather than
+quietly choosing one.
+
+```sh
+go build -tags dev ./cmd/api
+go run  -tags dev ./cmd/api mint-token <idp-subject> <tenant-uuid>
+```
+
+`mint-token` carries the same build tag as the provider, so a deployment build
+can no more issue a credential than it can accept one. The token it prints is
+valid for 24 hours and is signed with `YMCA_DEV_AUTH_SECRET`; `<idp-subject>`
+must match a `principal.idp_subject` already in the database.
+
+```sh
+curl -sS localhost:8000/api/v1/t/$TENANT/me \
+  -H "Authorization: Bearer $TOKEN" -H 'X-Request-Id: local-1'
+```
+
+### Tests
+
+```sh
+go test ./...                              # unit, no services needed
+go test -tags dev ./...                    # adds the dev provider's own tests
+go test -tags 'integration dev' ./...      # needs postgres and openfga running
+```
+
+The integration tests use the environment above and **fail rather than skip**
+when a variable is missing: a test that passes because it never ran is worse
+than no test. They prove the things unit tests cannot — that RLS actually
+isolates, that an unset `app.tenant_id` raises, that a real OpenFGA tuple
+produces ALLOW and its absence produces an audited DENY, and that `GET /me`
+returns exactly the permissions the graph grants.
+
 ---
 
 ## Roles
@@ -124,18 +179,32 @@ CREATE ROLE ymca_api LOGIN PASSWORD '<choose one>' IN ROLE ymca_app;
 `ymca_app`, so the append-only property is a privilege rather than a
 convention.
 
-### Every connection must name its tenant
-
-```sql
-SET app.tenant_id = '<uuid>';
-```
+### Every query must name its tenant
 
 The policy is `A2.1` verbatim, which uses `current_setting('app.tenant_id')`
 without the `missing_ok` argument. A connection that has not set it **raises**
 rather than returning zero rows. That is fail-closed and loud, which is the
-right side to err on, but it means every pooled connection must set the value
-before it touches a tenant-scoped table — including on reset after a
-connection is returned to the pool.
+right side to err on.
+
+`db.InTenantTx` is the only way the application satisfies it, and the value is
+set **inside the transaction**, never on the connection:
+
+```sql
+BEGIN;
+SELECT set_config('app.tenant_id', $1, true);   -- true = local to this tx
+...
+COMMIT;
+```
+
+`SET LOCAL` cannot take a parameter, hence `set_config`. Setting it on the
+connection instead would leak the tenant forward: the pool hands that
+connection to an unrelated request the moment this one returns it. Anything
+reaching a tenant-scoped table outside `InTenantTx` is a defect, and PostgreSQL
+says so rather than returning a plausible empty result.
+
+The four tables `8.2` exempts from RLS — `person`, `principal`, `guardianship`,
+`restriction` — carry no `tenant_id` and are read through `db.Pool()` directly.
+That is the only legitimate use of `Pool()`.
 
 Verified against the running cluster: a `ymca_api` connection with
 `app.tenant_id` set to one tenant sees only that tenant's rows, a cross-tenant
@@ -146,9 +215,10 @@ Verified against the running cluster: a `ymca_api` connection with
 
 ## Divergence from the design record
 
-There is none outstanding. Everything this directory does that A1 and A2 did
-not originally say has been written into them (`ADR-107`, `ADR-108`, `A1.1`,
-`A1.6`, `A1.7`, `A1.8` rule 7, `A2.1`, `A2.2`, `11.2`, `12`).
+There is none outstanding. Everything this directory does that the record did
+not originally say has been written into it (`8.2`, `8.5`, `ADR-106`,
+`ADR-107`, `ADR-108`, `A1.1`, `A1.6`, `A1.7`, `A1.8` rule 7, `A2.1`, `A2.2`,
+`A3.2`, `A3.4`, `A3.9`, `11.2`, `12`).
 
 What remains is formatting, and it is checked rather than promised:
 
@@ -191,3 +261,9 @@ Recorded in `A2.1` and `11.2`, not worked around here:
   Until it exists the DAG is a graph.
 - **`audit_event` is not partitioned.** A2.10 marks it monthly on
   `occurred_at`; C3 records that there are no scale figures to size it against.
+- **Two of 6.1's step-3 limbs check nothing.** A2 defines no role assignment
+  at all, so the term window and clearance have nothing to query, and
+  `restriction.kind` maps to no permission. `internal/authz/validity.go`
+  keeps each limb as a named function that returns valid, so the gap is
+  visible in the code rather than silently absent — an expired term still
+  authorizes today.
