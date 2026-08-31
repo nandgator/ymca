@@ -60,6 +60,8 @@ mediated by verified contact points so existence is not disclosed.
 | Cycle check unimplemented     | `authorization_edge` accepts a cycle; the DAG is a graph until the pre-commit recursive CTE exists   | A2.2    |
 | Twelve tables without RLS     | No `tenant_id` column, so no policy. `charge` means an invoice id reaches its contents               | A2.1    |
 | Global rows invisible         | Nullable `tenant_id` on `verification`, `clearance`, `audit_event` never matches a tenant connection | A2.1    |
+| Role assignment unmodelled    | No role table in A2 though A1 has both types; an expired term still authorizes (6.1 step 3)          | A2.7    |
+| Restriction kind unmapped     | No kind-to-permission mapping; restriction is never checked at all (6.1 step 3, 8.8)                 | A2.8    |
 
 ## 11.3 Unresolved tensions
 

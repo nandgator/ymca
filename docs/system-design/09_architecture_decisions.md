@@ -1807,23 +1807,46 @@ Authenticator
     Authenticate(token) → (principal_id, principal_kind, tenant_id, expires_at)
 ```
 
-`principal_kind` is `PERSONAL` or `ELEVATED` (ADR-066, ADR-067) — never both
-at once. The slice ships a development implementation; a deployment picks
-Cognito, Supabase or Appwrite behind the same port.
+`principal_kind` is `PERSONAL`, `STAFF` or `ELEVATED` (05.2.3) — exactly one,
+never a combination. The slice ships a development implementation; a
+deployment picks Cognito, Supabase or Appwrite behind the same port.
 
 **Rationale.** The provider is a deployment choice, not a tenant one, so a
 port with one concrete implementation per deployment is the whole of the
-abstraction needed. Modelling both principal kinds now matters more than the
-provider: they are the subjects of tuples, and retrofitting the split means
-reissuing every tuple whose subject is a principal.
+abstraction needed. Modelling all three principal kinds now matters more than
+the provider: they are the subjects of tuples, and retrofitting the split
+means reissuing every tuple whose subject is a principal. The distinction
+exists for auditing (05.2.3): a support engineer's routine gym booking and
+that engineer's break-glass tenant access must not share a subject, and the
+same argument separates a staff act from a member act.
 
 **Consequence.** Session lifetime, refresh, MFA on the platform plane, and
 ELEVATED issuance remain undesigned. They are the port's implementation
 concerns, and none of them changes the shape of the port.
 
 **Note.** The development implementation must be impossible to enable
-accidentally: it refuses to start unless explicitly selected, and a build
-intended for deployment does not contain it.
+accidentally, and the guarantee is two independent gates:
+
+```txt
+build     every file of the dev implementation carries //go:build dev, so a
+          build without -tags dev does not contain the code at all
+runtime   YMCA_AUTH_PROVIDER must be exactly "dev"; there is no default, and
+          an unknown provider name is a start-up error
+```
+
+The tag is `dev` rather than `!prod` deliberately: a forgotten build flag
+must yield a binary WITHOUT the development authenticator, never one with it.
+
+The development implementation verifies a symmetric token signed with
+`YMCA_DEV_AUTH_SECRET`, refuses a secret shorter than 32 bytes at start-up
+rather than at request time, and accepts exactly one algorithm — there is no
+algorithm agility to get wrong. It resolves the token's subject against
+`principal.idp_subject`; an unknown subject and a suspended principal are the
+same answer to the caller, per 8.8.
+
+Minting such a token is the same gate again: `api mint-token <sub> <tenant>`
+is a `//go:build dev` subcommand, so a deployment build cannot issue a
+credential any more than it can accept one.
 
 ---
 

@@ -84,6 +84,18 @@ CREATE POLICY tenant_isolation ON <table>
 `app.tenant_id` is set per transaction from the authenticated request context
 and never from user input.
 
+Per transaction is not a stylistic preference. The pool hands a connection to
+the next, unrelated request as soon as this one returns it, so a value set on
+the connection would outlive the request that set it and be read by whoever
+got the connection next. The setting is therefore made local to the
+transaction, and there is no code path that sets it any other way.
+
+`current_setting` is called without `missing_ok`, so a query that reaches a
+tenant-scoped table outside such a transaction **raises** rather than quietly
+matching no rows. That is the fail-closed half of the design: a forgotten
+tenant context is a loud error, not an empty list that looks like a legitimate
+answer. It must not be softened by catching that error anywhere.
+
 **Tables exempt from RLS**, and why:
 
 ```txt
@@ -243,6 +255,14 @@ Every financial mutation
 Every policy definition or binding change
 Every cross-tenant operation
 ```
+
+**An authentication failure is not one of these.** It is refused before any
+principal or tenant exists, so there is no actor to name and no tenant whose
+isolation policy the row could satisfy — `audit_event` is tenant-scoped like
+every other table, and a row with no tenant is not insertable from a tenant
+connection at all. Those failures go to the structured log, correlated by the
+same request id (A3.4). A tenant mismatch is the opposite case and _is_
+audited: it has an authenticated principal and a tenant the caller named.
 
 ### Record shape
 

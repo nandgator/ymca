@@ -33,14 +33,14 @@ Resolved through the port of ADR-106 to:
 
 ```txt
 principal_id      the subject of every tuple
-principal_kind    PERSONAL | ELEVATED
+principal_kind    PERSONAL | STAFF | ELEVATED
 tenant_id         compared against the path
 expires_at        checked at decision time, never by a sweeper
 ```
 
-A person acting as themselves and the same person acting with elevated
-authority are different principals, and therefore different subjects. Nothing
-in the API lets one request carry both.
+A person acting as themselves, as staff, and with elevated authority are
+three different principals, and therefore three different subjects (05.2.3).
+Nothing in the API lets one request carry more than one.
 
 ---
 
@@ -69,6 +69,41 @@ itself information.
 `code` is stable and machine-readable; `message` is for a developer, never
 rendered to a member. No stack traces, no SQL, no object identifiers the
 caller could not already name.
+
+The codes every endpoint may emit, and their status:
+
+```txt
+401  unauthenticated    no credential, or one that will not be accepted
+401  token_expired      the credential was valid and no longer is
+403  tenant_mismatch    the path names a tenant the token does not
+403  forbidden          the check of 6.1 denied
+404  not_found          absent, or the caller may not know it exists (A3.3)
+500  internal           anything the caller cannot act on
+```
+
+`unauthenticated` collapses every reason a credential was refused — missing,
+malformed, bad signature, unknown subject, suspended principal — into one
+answer, per 8.8. `token_expired` is the single exception, and exists only
+because a client reacts to it differently, by refreshing.
+
+`tenant_mismatch` is 403 rather than 401: the caller authenticated
+successfully, and refusing a tenant the caller named themselves discloses
+nothing (ADR-105). Falling back to 401 would instead tell them their
+credential was the problem, which it was not.
+
+### Request correlation
+
+```txt
+X-Request-Id: <token>
+```
+
+Accepted on any request and always returned. A well-formed incoming value is
+honoured; anything else — absent, over-long, or carrying whitespace or
+control characters — is replaced by a server-generated one rather than
+rejected, since a bad correlation id is not worth failing a request over. The
+value reaching the server is what appears in the structured log and in
+`audit_event.context` (8.5), so a caller can find their own request in the
+trail.
 
 ---
 
@@ -156,3 +191,35 @@ notifications  bulk import      cross-tenant grants
 ```
 
 Present in the design, absent from the API until something needs them.
+
+---
+
+## A3.9 What `/me` reports
+
+```json
+{
+  "principal_id": "...",
+  "kind": "PERSONAL",
+  "person_id": "...",
+  "tenant_id": "...",
+  "permissions": ["tenant:admin", "tenant:member"]
+}
+```
+
+`permissions` is exactly four candidates, each a full 6.1 check against the
+tenant object named in the path: `tenant:admin`, `tenant:member`,
+`tenant:finance_reader`, `tenant:safeguarding_reader`. Four checks, fixed,
+whatever the tenant contains; only the ones that pass are listed.
+
+A permission on any other object — `consumption_type:may_record`, an invoice,
+a unit — is reported by the endpoint that returns that object, at most one
+check per row of a page (8.11), never here. `/me` cannot enumerate
+object-scoped permissions without a reverse index, and ADR-104 and 8.11
+refuse `ListObjects` precisely so that no such index exists — a `/me` that
+answered "which consumption types may I record against" would be that index
+under another name. It reports authority held over the tenant; everything
+else is answered where the object is returned.
+
+This is what makes the single permission-gated Flutter app possible (A3.7):
+the client gates its shell on `/me` and gates each row on the flags the list
+that row came from already gave it.
