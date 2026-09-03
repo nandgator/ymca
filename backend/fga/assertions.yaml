@@ -34,7 +34,8 @@ tuples:
 
   # ── Bombay · principals ───────────────────────────────────
   - { user: "principal:alice", relation: "member", object: "tenant:bombay" }
-  - { user: "principal:alice", relation: "member_read", object: "organizational_unit:bombay/procter" }
+  # Alice's member_read is NOT here. She holds it as Branch Secretary, and
+  # the role path is contextual — see the block below.
   - { user: "principal:procter-admin", relation: "admin", object: "organizational_unit:bombay/procter" }
   # Held at the tenant-level unit, so that the unit_close DENY below tests
   # per-permission propagation (ADR-014) rather than an absent grant.
@@ -119,6 +120,59 @@ tuples:
   - { user: "entitlement_bundle:pune-access#beneficiary", relation: "entitled", object: "resource:pune/central-pool" }
   - { user: "tenant:pune", relation: "tenant", object: "consumption_type:pune/dinner" }
   - { user: "entitlement_bundle:pune-access#beneficiary", relation: "entitled", object: "consumption_type:pune/dinner" }
+
+# ─────────────────────────────────────────────────────────────
+# THE ROLE PATH — supplied per check, never written. ADR-109
+#
+# At runtime internal/authz builds exactly these two shapes from
+# PostgreSQL, for the one permission being checked, with the term
+# window, the clearance precondition and ACTING cover already
+# applied in the SQL. An assignment that is not effective is never
+# supplied, so an expired term cannot authorize (ADR-070) without
+# any sweeper having to run.
+#
+# LoadAssertions REFUSES to let any of these appear under `tuples:`.
+# A stored role tuple would outlive the term that justified it.
+# ─────────────────────────────────────────────────────────────
+
+contextual:
+  # Alice is Branch Secretary at Procter; the role confers member_read.
+  # Her ALLOW on the sub-unit below therefore travels role -> scope ->
+  # auth_parent, which is the whole mechanism in one assertion.
+  - { user: "principal:alice", relation: "subject", object: "role_assignment:ra-001" }
+  - { user: "role_assignment:ra-001#holder", relation: "member_read", object: "organizational_unit:bombay/procter" }
+
+  # A finance role at the tenant, to prove finance_reader is role-reachable.
+  - { user: "principal:bombay-treasurer", relation: "subject", object: "role_assignment:ra-002" }
+  - { user: "role_assignment:ra-002#holder", relation: "finance_reader", object: "tenant:bombay" }
+
+  - { user: "principal:mallory", relation: "subject", object: "role_assignment:ra-666" }
+
+# ─────────────────────────────────────────────────────────────
+# FORBIDDEN — tuples the MODEL ITSELF must refuse. ADR-078, ADR-110
+#
+# The grantable set is a decision about which permissions a tenant
+# may delegate through a role. It is enforced by the type
+# restrictions in A1.2: a relation is role-grantable if and only if
+# `role_assignment#holder` appears in its type restriction.
+#
+# These lines claim relations that are deliberately NOT in that set.
+# Each must be REJECTED by OpenFGA as a type violation — not merely
+# denied. A DENY would mean the tuple was accepted and happened not
+# to resolve, which is one careless edit away from resolving. A
+# rejection means it cannot be written at all.
+# ─────────────────────────────────────────────────────────────
+
+forbidden:
+  # A role may not make anyone the tenant owner, nor an admin — that is
+  # the privilege-escalation route ADR-078 forbids, and admin propagates
+  # through the whole DAG (ADR-014).
+  - { user: "role_assignment:ra-666#holder", relation: "owner", object: "tenant:bombay" }
+  - { user: "role_assignment:ra-666#holder", relation: "admin", object: "tenant:bombay" }
+  # Nor may a role confer membership or entitlement. Those reach a person
+  # through a membership, never through a job (A1.5).
+  - { user: "role_assignment:ra-666#holder", relation: "member", object: "tenant:bombay" }
+  - { user: "role_assignment:ra-666#holder", relation: "may_use", object: "resource:bombay/procter-pool" }
 
 # ─────────────────────────────────────────────────────────────
 # ASSERTIONS

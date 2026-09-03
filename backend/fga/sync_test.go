@@ -77,9 +77,72 @@ func TestAssertionsCoverA1_7(t *testing.T) {
 	t.Logf("%d assertions promised by A1.7, all run", len(promised))
 }
 
+// TestForbiddenCoversA1_7Refuse is rule 9's half of the sync guard. A1.7's
+// "Must REFUSE" block names the relations a role may never confer; the suite's
+// `forbidden` block is what actually probes them. If the two drift, the
+// grantable set is being enforced against a list nobody is reading.
+func TestForbiddenCoversA1_7Refuse(t *testing.T) {
+	doc := readDesignDoc(t)
+
+	section, ok := sectionBetween(doc, "### Must REFUSE", "### Must DENY")
+	if !ok {
+		t.Fatalf("no \"Must REFUSE\" section in %s; ADR-110's grantable set "+
+			"would rest on nothing", designDoc)
+	}
+
+	promised, err := parseTupleLines(section)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(promised) == 0 {
+		t.Fatal("A1.7 promises no forbidden tuples; the section's shape has changed")
+	}
+
+	suite, err := LoadAssertions()
+	if err != nil {
+		t.Fatalf("load suite: %v", err)
+	}
+	probed := make(map[string]bool, len(suite.Forbidden))
+	for _, f := range suite.Forbidden {
+		probed[f.User+" "+f.Relation+" "+f.Object] = true
+	}
+
+	for _, p := range promised {
+		if key := p.user + " " + p.relation + " " + p.object; !probed[key] {
+			t.Errorf("A1.7 requires %q to be refused but nothing probes it", key)
+		}
+	}
+	t.Logf("%d forbidden tuples promised by A1.7, all probed", len(promised))
+}
+
 type promisedAssertion struct {
 	user, relation, object string
 	expect                 bool
+}
+
+// parseTupleLines reads `user relation object` lines out of every fenced block
+// in a section, applying the same typed-subject rule parseA1_7 applies.
+func parseTupleLines(section string) ([]promisedAssertion, error) {
+	var (
+		out    []promisedAssertion
+		inCode bool
+	)
+	for _, line := range strings.Split(section, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inCode = !inCode
+			continue
+		}
+		if !inCode || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("A1.7: %q is not `user relation object`", trimmed)
+		}
+		out = append(out, promisedAssertion{fields[0], fields[1], fields[2], false})
+	}
+	return out, nil
 }
 
 // parseA1_7 reads the ALLOW and DENY blocks. Headings set the expectation, so
@@ -102,6 +165,17 @@ func parseA1_7(section string) ([]promisedAssertion, error) {
 				expect, known = true, true
 			case strings.Contains(heading, "MUST DENY"):
 				expect, known = false, true
+			case strings.Contains(heading, "MUST REFUSE"):
+				// Rule 9's block, covered by TestForbiddenCoversA1_7Refuse.
+				// Named here so it is a recognised heading rather than one
+				// that falls through to the typo check below.
+				known = false
+			case strings.Contains(heading, "MUST "):
+				// A heading the parser does not recognise would silently
+				// skip every assertion under it — "Must ALOW" would disarm a
+				// whole block and still pass. Fail instead.
+				return nil, fmt.Errorf(
+					"A1.7: unrecognised heading %q; expected ALLOW, DENY or REFUSE", trimmed)
 			default:
 				known = false
 			}

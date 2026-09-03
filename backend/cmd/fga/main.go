@@ -134,15 +134,30 @@ func test(ctx context.Context, apiURL string) error {
 		return err
 	}
 
-	fmt.Printf("store %s (throwaway)\nmodel %s\n%d tuples, %d assertions\n\n",
-		storeID, modelID, len(suite.Tuples), len(suite.Assertions))
+	// The role path is never written. It is supplied on every Check exactly
+	// as internal/authz supplies it at runtime, from PostgreSQL, once the
+	// term window and clearance have been resolved (ADR-109). Writing these
+	// instead would prove the model resolves a shape the system never
+	// produces.
+	contextual := make([]client.ClientContextualTupleKey, 0, len(suite.Contextual))
+	for _, t := range suite.Contextual {
+		contextual = append(contextual, client.ClientContextualTupleKey{
+			User:     t.User,
+			Relation: t.Relation,
+			Object:   t.Object,
+		})
+	}
+
+	fmt.Printf("store %s (throwaway)\nmodel %s\n%d tuples, %d contextual, %d assertions\n\n",
+		storeID, modelID, len(suite.Tuples), len(contextual), len(suite.Assertions))
 
 	var failures []string
 	for _, a := range suite.Assertions {
 		got, err := fga.Check(ctx).Body(client.ClientCheckRequest{
-			User:     a.User,
-			Relation: a.Relation,
-			Object:   a.Object,
+			User:             a.User,
+			Relation:         a.Relation,
+			Object:           a.Object,
+			ContextualTuples: contextual,
 		}).Execute()
 		if err != nil {
 			// An error is not a DENY. A model that rejects the check as
@@ -170,6 +185,8 @@ func test(ctx context.Context, apiURL string) error {
 		fmt.Printf("ok     %s  [%s]\n", a.Name, verdict)
 	}
 
+	failures = append(failures, checkForbidden(ctx, fga, suite.Forbidden)...)
+
 	fmt.Println()
 	if len(failures) > 0 {
 		fmt.Fprintf(os.Stderr, "%s\n\n", strings.Join(failures, "\n"))
@@ -177,6 +194,43 @@ func test(ctx context.Context, apiURL string) error {
 	}
 	fmt.Printf("all %d assertions passed\n", len(suite.Assertions))
 	return nil
+}
+
+// checkForbidden proves the grantable set of ADR-110 by trying to write each
+// forbidden tuple and requiring the store to refuse it. A write that succeeds
+// means a relation became role-grantable — the privilege-escalation route of
+// ADR-078.
+//
+// It runs after the assertions, so an accepted tuple cannot alter a verdict
+// already reached. The delete is for the case where this suite is ever
+// pointed at a store that outlives the run.
+func checkForbidden(ctx context.Context, fga *client.OpenFgaClient, forbidden []fgafiles.Tuple) []string {
+	var failures []string
+	for _, t := range forbidden {
+		key := client.ClientTupleKey{User: t.User, Relation: t.Relation, Object: t.Object}
+		_, err := fga.Write(ctx).Body(client.ClientWriteRequest{
+			Writes: []client.ClientTupleKey{key},
+		}).Execute()
+		if err != nil {
+			fmt.Printf("ok     refused  %s %s %s\n", t.User, t.Relation, t.Object)
+			continue
+		}
+		failures = append(failures, fmt.Sprintf(
+			"FAIL   forbidden tuple was ACCEPTED: %s %s %s\n"+
+				"         %s is role-grantable, and ADR-110 says it must not be.\n"+
+				"         Remove role_assignment#holder from its type restriction in A1.2.",
+			t.User, t.Relation, t.Object, t.Relation))
+		fmt.Printf("FAIL   accepted  %s %s %s\n", t.User, t.Relation, t.Object)
+
+		if _, err := fga.Write(ctx).Body(client.ClientWriteRequest{
+			Deletes: []client.ClientTupleKeyWithoutCondition{{
+				User: t.User, Relation: t.Relation, Object: t.Object,
+			}},
+		}).Execute(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remove forbidden tuple: %v\n", err)
+		}
+	}
+	return failures
 }
 
 func writeModel(ctx context.Context, fga *client.OpenFgaClient) (string, error) {

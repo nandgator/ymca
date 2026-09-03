@@ -23,16 +23,28 @@ Caller                Auth Service         OpenFGA        PostgreSQL
   │                        │    (reject if    │                │
   │                        │     absent)      │                │
   │                        │                  │                │
-  │                        │ 2. graph query   │                │
+  │                        │ 2. effective role assignments      │
+  │                        │    for THIS permission             │
+  │                        ├──────────────────┼───────────────▶│
+  │                        │   term window ───┼── in the WHERE │
+  │                        │   clearance    ──┼── clause, not  │
+  │                        │   ACTING cover ──┼── after it     │
+  │                        │   restriction on the role path    │
+  │                        │◀─────────────────┼────────────────┤
+  │                        │   0..n assignments                 │
+  │                        │                  │                │
+  │                        │ 3. graph query,  │                │
+  │                        │    those as      │                │
+  │                        │    contextual    │                │
+  │                        │    tuples        │                │
   │                        ├─────────────────▶│                │
   │                        │◀─────────────────┤                │
   │                        │   ALLOW / DENY   │                │
   │                        │                  │                │
-  │                        │ 3. validity checks│               │
+  │                        │ 4. remaining validity              │
   │                        ├──────────────────┼───────────────▶│
-  │                        │   term window?   │                │
-  │                        │   clearance?     │                │
-  │                        │   restriction?   │                │
+  │                        │   principal / person status        │
+  │                        │   restriction on the permission    │
   │                        │◀─────────────────┼────────────────┤
   │                        │                  │                │
   │◀───────────────────────┤                  │                │
@@ -43,17 +55,41 @@ Caller                Auth Service         OpenFGA        PostgreSQL
 resolvable tenant ancestor is rejected before any graph query. This is the
 runtime enforcement of ADR-018.
 
-**Step 3 is why the graph alone is insufficient.** OpenFGA answers _is Alice
-related in a way that grants this_. PostgreSQL answers _is that relationship
-currently effective_ — term not expired, clearance not lapsed, no restriction
-in force. Both must pass.
+**Step 2 runs before the graph, and that ordering is the point** (ADR-109).
+A role assignment reaches OpenFGA only as a contextual tuple, built for the
+one permission being checked, and only if it is effective right now. An
+expired term, a lapsed clearance, an assignment under `ACTING` cover or a
+person under `NO_ROLE_ASSIGNMENT` produces no tuple, so no path through it
+exists for the graph to find.
+
+**Why not after the graph.** `Check` returns a boolean, not a path. Where a
+permission is reachable both through a role and through something else — a
+tenant admin who also holds a lapsed secretaryship — a validity step that runs
+afterwards cannot tell which route produced the ALLOW, and there is no
+question it can ask that gets the right answer for both cases. Ordering
+resolves what interrogation cannot.
+
+**Step 4 is the remainder**, and it is smaller than the original step 3: the
+principal and person must be active, and no restriction may withhold this
+specific permission (A2.8). Terms and clearances are no longer here, because
+by step 4 nothing expired can still be in play.
 
 ### Why validity is not in the graph
 
 Putting term windows and clearance expiry into OpenFGA would require
 rewriting tuples on a clock. Then a delayed sweeper means a lapsed clearance
-still authorizes, which is the exact failure the design refuses. Consulting
-PostgreSQL at decision time makes expiry instantaneous by construction.
+still authorizes, which is the exact failure the design refuses. Resolving
+against PostgreSQL at decision time makes expiry instantaneous by
+construction — and supplying the result as a contextual tuple means the graph
+never holds a fact that outlives the term justifying it.
+
+### The cost
+
+Step 2 is one indexed query on every authorized request. It replaces rather
+than adds: the old step 3 already read `principal` and `person` on every
+check. `10` sets a p99 for `check()` and this now sits inside it, so
+`role_assignment (subject_principal_id, ...)` in A2.12 is a latency
+requirement rather than a nicety.
 
 ---
 

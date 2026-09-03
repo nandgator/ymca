@@ -60,8 +60,12 @@ mediated by verified contact points so existence is not disclosed.
 | Cycle check unimplemented     | `authorization_edge` accepts a cycle; the DAG is a graph until the pre-commit recursive CTE exists   | A2.2    |
 | Twelve tables without RLS     | No `tenant_id` column, so no policy. `charge` means an invoice id reaches its contents               | A2.1    |
 | Global rows invisible         | Nullable `tenant_id` on `verification`, `clearance`, `audit_event` never matches a tenant connection | A2.1    |
-| Role assignment unmodelled    | No role table in A2 though A1 has both types; an expired term still authorizes (6.1 step 3)          | A2.7    |
-| Restriction kind unmapped     | No kind-to-permission mapping; restriction is never checked at all (6.1 step 3, 8.8)                 | A2.8    |
+| A2.7 role tables unmigrated   | Specified and wired into A1.2 and 6.1; migration `0002` does not exist, so no role can yet be held   | A2.7    |
+| Two A2.11 triggers unwritten  | MANDATORY_TERM needs `valid_until`; `role_permission` must reject a non-grantable permission         | A2.11   |
+| Office appointment workflow   | `office_conferred_role` exists; materializing assignments on appointment is unwritten (05.6.4)       | A2.7    |
+| Committee-conferred roles     | 05.6.7 routes approval through committee membership; only offices have a conferral table             | A2.7    |
+| Role template catalogue       | ADR-079 says templates are cloned; no template source exists to clone from                           | 05.6.12 |
+| No reverse role query         | "who holds this permission here" is a PostgreSQL query nobody has written (05.6.7 step 2)            | ADR-109 |
 
 ## 11.3 Unresolved tensions
 

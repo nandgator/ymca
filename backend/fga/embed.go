@@ -14,6 +14,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,8 +49,36 @@ type Assertion struct {
 
 // Suite is the whole of assertions.yaml.
 type Suite struct {
-	Tuples     []Tuple     `yaml:"tuples"`
+	Tuples []Tuple `yaml:"tuples"`
+	// Contextual holds the role path (A1.6). These are NOT written to the
+	// store: they are supplied on every Check as contextual tuples, which
+	// is how the running system supplies them too (ADR-109). The suite is
+	// therefore exercising the real mechanism rather than a lookalike that
+	// happens to resolve.
+	Contextual []Tuple `yaml:"contextual"`
+	// Forbidden holds tuples the model must REFUSE outright. They encode
+	// the grantable set of ADR-110: a relation is role-grantable exactly
+	// when `role_assignment#holder` is in its type restriction, so a role
+	// tuple against any other relation is a type violation and OpenFGA
+	// rejects it. Asserting a DENY here would be weaker — a DENY means the
+	// tuple was accepted and merely failed to resolve.
+	Forbidden  []Tuple     `yaml:"forbidden"`
 	Assertions []Assertion `yaml:"assertions"`
+}
+
+// roleAssignmentPrefix is the type whose tuples may never be persisted.
+const roleAssignmentPrefix = "role_assignment:"
+
+// storable reports whether a tuple may be written to the store. A role
+// assignment's effectiveness — term window, clearance, ACTING cover — is a
+// PostgreSQL fact resolved per check (ADR-109). A stored role tuple would
+// outlive the term that justified it, which is exactly the sweeper
+// dependency ADR-070 refuses. Enforced here rather than asked for in a
+// comment, because A1.8's six prose rules were all obeyed while three
+// defects shipped.
+func storable(t Tuple) bool {
+	return !strings.HasPrefix(t.Object, roleAssignmentPrefix) &&
+		!strings.HasPrefix(t.User, roleAssignmentPrefix)
 }
 
 // LoadAssertions parses the embedded suite.
@@ -72,6 +101,40 @@ func LoadAssertions() (Suite, error) {
 	for i, t := range s.Tuples {
 		if t.User == "" || t.Relation == "" || t.Object == "" {
 			return Suite{}, fmt.Errorf("tuple %d is incomplete: %+v", i, t)
+		}
+		if !storable(t) {
+			return Suite{}, fmt.Errorf(
+				"tuple %d writes a role assignment to the store: %s %s %s.\n"+
+					"Role assignments are resolved per check and supplied as contextual\n"+
+					"tuples (ADR-109) — move this line to the `contextual:` block",
+				i, t.User, t.Relation, t.Object)
+		}
+	}
+	for i, t := range s.Contextual {
+		if t.User == "" || t.Relation == "" || t.Object == "" {
+			return Suite{}, fmt.Errorf("contextual tuple %d is incomplete: %+v", i, t)
+		}
+	}
+	if len(s.Forbidden) == 0 {
+		return Suite{}, fmt.Errorf(
+			"fga/assertions.yaml declares no forbidden tuples; the grantable set " +
+				"of ADR-110 would then rest on nothing")
+	}
+	for i, t := range s.Forbidden {
+		if t.User == "" || t.Relation == "" || t.Object == "" {
+			return Suite{}, fmt.Errorf("forbidden tuple %d is incomplete: %+v", i, t)
+		}
+		// This block means one thing only: the relation is outside the
+		// grantable set. A tuple with some other subject would be refused
+		// for an unrelated reason and still report as proof of ADR-110,
+		// which is the vacuous-negative-test failure A1.7 already guards
+		// against elsewhere.
+		if !strings.HasPrefix(t.User, roleAssignmentPrefix) {
+			return Suite{}, fmt.Errorf(
+				"forbidden tuple %d has subject %q, not a role assignment: %s %s %s.\n"+
+					"The forbidden block proves the grantable set of ADR-110; a tuple\n"+
+					"refused for any other reason proves nothing about it",
+				i, t.User, t.User, t.Relation, t.Object)
 		}
 	}
 	return s, nil

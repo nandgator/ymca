@@ -52,8 +52,13 @@ type tenant
     # PostgreSQL. ADR-066, ADR-067
     define jit_grantee: [principal]
 
-    define finance_reader: [principal] or admin
-    define safeguarding_reader: [principal]
+    # Role-grantable. `role_assignment#holder` stands in the type
+    # restriction of every permission a tenant may confer through a
+    # role and nowhere else, so which permissions are delegable is
+    # read off this file rather than out of prose. ADR-109, ADR-110
+    define finance_reader: [principal, role_assignment#holder] or admin
+    define safeguarding_reader: [principal, role_assignment#holder]
+    define may_approve_membership: [principal, role_assignment#holder] or admin
 
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
@@ -84,8 +89,8 @@ type organizational_unit
 
     # Per-permission propagation. ADR-014
     # member_read reaches descendants; unit_close does not.
-    define member_read: [principal] or member_read from auth_parent or admin
-    define unit_close: [principal] or admin
+    define member_read: [principal, role_assignment#holder] or member_read from auth_parent or admin
+    define unit_close: [principal, role_assignment#holder] or admin
 
 
 # ─────────────────────────────────────────────────────────────
@@ -145,11 +150,15 @@ type role_definition
 
 type role_assignment
   relations
-    define definition: [role_definition]
+    # The subject, and the userset every role-grantable permission
+    # names. Definition, scope, term window and clearance are
+    # PostgreSQL facts (A2.7): they are resolved BEFORE the graph is
+    # asked, and an assignment that is not effective is never
+    # supplied as a contextual tuple. None of that is expressible
+    # here, so none of it is declared here — an earlier draft
+    # declared `definition` and `scope` and nothing read either.
+    # ADR-069, ADR-070, ADR-087, ADR-109
     define subject: [principal]
-    define scope: [organizational_unit, resource, programme, tenant]
-    # Effectiveness — term window, clearance — is resolved in
-    # PostgreSQL. ADR-069, ADR-070, ADR-087
     define holder: subject
 
 
@@ -232,7 +241,7 @@ type resource
 
     define may_use: entitled or manager
     define may_book: entitled or manager
-    define may_close: manager
+    define may_close: [role_assignment#holder] or manager
 
 
 # ─────────────────────────────────────────────────────────────
@@ -249,7 +258,7 @@ type programme
     define open_to_public: [person:*]
 
     define may_enrol: entitled or open_to_public
-    define may_manage: manager
+    define may_manage: [role_assignment#holder] or manager
 
 type offering
   relations
@@ -274,10 +283,10 @@ type consumption_type
     # Self-service recording follows entitlement, exactly as
     # resource use does. Recording FOR someone else is staff work.
     define may_record: entitled or manager
-    define may_record_for_other: [principal] or manager
-    define may_correct: [principal] or manager
-    define may_read: [principal] or manager
-    define may_close_period: manager
+    define may_record_for_other: [principal, role_assignment#holder] or manager
+    define may_correct: [principal, role_assignment#holder] or manager
+    define may_read: [principal, role_assignment#holder] or manager
+    define may_close_period: [role_assignment#holder] or manager
 
 
 # ─────────────────────────────────────────────────────────────

@@ -124,6 +124,8 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-106](#adr-106) | Authentication is a port                                 | R1         |
 | [ADR-107](#adr-107) | Entitlement reaches a person by plan or by subscription  | R5         |
 | [ADR-108](#adr-108) | Tenant isolation rests on a role, not only on the schema | R5         |
+| [ADR-109](#adr-109) | Role assignments resolved per check, never stored        | R8         |
+| [ADR-110](#adr-110) | The grantable set is declared by type restriction        | R8         |
 
 ---
 
@@ -1605,9 +1607,15 @@ dispatcher recovers, applies the row   the tuple exists again
 ```
 
 No synchronous path runs a second time and nothing else removes it.
-Idempotency (8.9) makes redelivery safe, not ordered. The validity checks of
-6.1 step 3 cover term windows, clearance and restrictions — not revocation —
-so the tuple is the sole source of truth for whether the relation holds.
+Idempotency (8.9) makes redelivery safe, not ordered. The PostgreSQL steps of
+6.1 cover term windows, clearance and restrictions — not revocation — so the
+tuple is the sole source of truth for whether the relation holds.
+
+ADR-109 narrows this ADR's reach without weakening it. Role assignments are no
+longer projected at all, so they never enter the outbox and cannot be
+resurrected by it. What remains fenced is everything else the outbox carries —
+entitlement, membership coverage, affiliation authority — for which the tuple
+is still the only record.
 
 **Consequence.** Obligation 2 is the one that is easy to omit. Without it a
 grant transaction that began before the revocation and commits after it is
@@ -1941,3 +1949,119 @@ convention.
 environment, not assumed: connect as the application role, set one tenant, and
 confirm that a second tenant's rows are invisible and a cross-tenant insert is
 rejected.
+
+---
+
+### ADR-109
+
+**Role assignments are resolved per check, never stored as tuples** ·
+Accepted · R8
+
+**Decision.** A role assignment is never written to OpenFGA. For each check,
+PostgreSQL resolves the assignments that grant the permission being checked,
+and those are supplied to `Check` as **contextual tuples**:
+
+```txt
+principal:<pid>            subject      role_assignment:<ra>
+role_assignment:<ra>#holder <relation>  <scope_type>:<scope_id>
+```
+
+The term window, the clearance precondition (ADR-087) and any `ACTING` cover
+are applied in that query's `WHERE` clause. An assignment that is not
+effective is simply never supplied.
+
+6.1 therefore has four steps rather than three:
+
+```txt
+1  TENANT     ancestry                              unchanged
+2  ROLE       PostgreSQL: effective assignments     new
+3  GRAPH      OpenFGA, with those contextual tuples was step 2
+4  VALIDITY   principal/person status, restriction  was step 3, reduced
+```
+
+**Rationale.** The alternative — projecting role tuples through the outbox —
+cannot enforce ADR-070, and the reason is structural rather than a matter of
+effort. `Check` returns a **boolean, not a path**. If a permission is
+reachable both through an expired role assignment and through some other
+relation, a validity step that receives only a principal id cannot tell which
+path produced the ALLOW. Asking "does this principal hold an expired
+assignment?" denies a tenant admin wrongly; asking "is any assignment
+effective?" allows an expired one wrongly. There is no third question
+available to it.
+
+This is why `checkTermWindow` and `checkClearance` could never have been
+written as 6.1 originally specified, and why they shipped in 8.2 as named
+no-ops. The defect was in the shape of the check, not in the code.
+
+Resolving before the graph removes the ambiguity entirely: an ineffective
+assignment is not in the input, so no path through it exists to be found.
+Expiry becomes instantaneous by construction, which is what ADR-070 asks for
+and what no sweeper can deliver.
+
+**Consequence.**
+
+- No projection, no outbox rows and no fence for role assignments. ADR-101's
+  machinery stays for what it was built for; roles never enter it.
+- ADR-080's "role edits propagate immediately" becomes free and literal. A
+  permission added to a definition is in effect on the next check, with no
+  bulk re-projection over existing assignments.
+- Every check costs one indexed PostgreSQL query. It already cost one — step 3
+  read `principal` and `person` — so this replaces a query rather than adding
+  one.
+- The graph can no longer answer "who holds this permission" for role-derived
+  authority. `ListObjects` was already prohibited (ADR-104) and 05.6.7's
+  approval routing already resolves holders from PostgreSQL, so nothing that
+  exists depends on it. A future reverse query is a PostgreSQL query.
+- The contextual tuple set is bounded by the assignments granting **one**
+  permission to **one** principal, not by everything they hold.
+
+**Note.** A1.8 rule 8 enforces this: the assertion suite refuses to write a
+role tuple to the store, and supplies the role path exactly as the running
+system does. A suite that wrote them would prove the model resolves a shape
+the system never produces.
+
+---
+
+### ADR-110
+
+**The grantable set is declared by type restriction** · Accepted · R8
+
+**Decision.** A permission is conferrable by a role if and only if
+`role_assignment#holder` appears in its type restriction in A1.2. The set is
+operational permissions — the ones that name a **job**:
+
+```txt
+GRANTABLE     member_read, unit_close, may_close, may_manage,
+              may_record_for_other, may_correct, may_read,
+              may_close_period, finance_reader, safeguarding_reader,
+              may_approve_membership
+
+NEVER         owner, admin        identity and escalation (ADR-078)
+              member              membership, not a job
+              entitled, covered, beneficiary, may_use, may_book,
+              may_record, may_enrol    entitlement, via a membership
+```
+
+**Rationale.** Without a stated set, "which permissions may a tenant delegate"
+is answered by whoever adds the next relation. `admin` is the sharp case: it
+propagates through the whole DAG (ADR-014), so a role conferring it at the
+tenant reaches every unit, resource and consumption type below — the
+privilege-escalation route ADR-078 forbids, arrived at without anyone
+deciding to allow it.
+
+Entitlement is excluded for a different reason. A person reaches a facility
+because a membership covers them (ADR-107), and a role that granted `may_use`
+would be a second, invisible route to the same thing — one that no membership
+records and no invoice reflects.
+
+**Consequence.** The set lives in the model rather than in prose, so a diff
+shows it changing. A1.8 rule 9 proves the complement: A1.7's "Must REFUSE"
+block lists relations a role may not confer, and the suite requires OpenFGA to
+**reject** each write rather than merely deny the check. A rejection cannot be
+one careless edit away from an ALLOW; a DENY can.
+
+**Note.** `may_approve_membership` is new, on `tenant`. 05.3, 05.6.7 and 6.2
+all check `membership.approve` and A1.2 declared no such relation — the
+endpoint 8.3 builds first had no permission to check. It is tenant-scoped
+because A3.7 admits at the tenant (`POST /t/{t}/memberships`); a unit-scoped
+variant follows if applications ever become unit-scoped.

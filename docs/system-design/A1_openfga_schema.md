@@ -94,8 +94,13 @@ type tenant
     # PostgreSQL. ADR-066, ADR-067
     define jit_grantee: [principal]
 
-    define finance_reader: [principal] or admin
-    define safeguarding_reader: [principal]
+    # Role-grantable. `role_assignment#holder` stands in the type
+    # restriction of every permission a tenant may confer through a
+    # role and nowhere else, so which permissions are delegable is
+    # read off this file rather than out of prose. ADR-109, ADR-110
+    define finance_reader: [principal, role_assignment#holder] or admin
+    define safeguarding_reader: [principal, role_assignment#holder]
+    define may_approve_membership: [principal, role_assignment#holder] or admin
 
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
@@ -126,8 +131,8 @@ type organizational_unit
 
     # Per-permission propagation. ADR-014
     # member_read reaches descendants; unit_close does not.
-    define member_read: [principal] or member_read from auth_parent or admin
-    define unit_close: [principal] or admin
+    define member_read: [principal, role_assignment#holder] or member_read from auth_parent or admin
+    define unit_close: [principal, role_assignment#holder] or admin
 
 
 # ─────────────────────────────────────────────────────────────
@@ -187,11 +192,15 @@ type role_definition
 
 type role_assignment
   relations
-    define definition: [role_definition]
+    # The subject, and the userset every role-grantable permission
+    # names. Definition, scope, term window and clearance are
+    # PostgreSQL facts (A2.7): they are resolved BEFORE the graph is
+    # asked, and an assignment that is not effective is never
+    # supplied as a contextual tuple. None of that is expressible
+    # here, so none of it is declared here — an earlier draft
+    # declared `definition` and `scope` and nothing read either.
+    # ADR-069, ADR-070, ADR-087, ADR-109
     define subject: [principal]
-    define scope: [organizational_unit, resource, programme, tenant]
-    # Effectiveness — term window, clearance — is resolved in
-    # PostgreSQL. ADR-069, ADR-070, ADR-087
     define holder: subject
 
 
@@ -274,7 +283,7 @@ type resource
 
     define may_use: entitled or manager
     define may_book: entitled or manager
-    define may_close: manager
+    define may_close: [role_assignment#holder] or manager
 
 
 # ─────────────────────────────────────────────────────────────
@@ -291,7 +300,7 @@ type programme
     define open_to_public: [person:*]
 
     define may_enrol: entitled or open_to_public
-    define may_manage: manager
+    define may_manage: [role_assignment#holder] or manager
 
 type offering
   relations
@@ -316,10 +325,10 @@ type consumption_type
     # Self-service recording follows entitlement, exactly as
     # resource use does. Recording FOR someone else is staff work.
     define may_record: entitled or manager
-    define may_record_for_other: [principal] or manager
-    define may_correct: [principal] or manager
-    define may_read: [principal] or manager
-    define may_close_period: manager
+    define may_record_for_other: [principal, role_assignment#holder] or manager
+    define may_correct: [principal, role_assignment#holder] or manager
+    define may_read: [principal, role_assignment#holder] or manager
+    define may_close_period: [role_assignment#holder] or manager
 
 
 # ─────────────────────────────────────────────────────────────
@@ -447,10 +456,22 @@ is how a fixture ends up written backwards.
 # Alice is a member of YMCA Bombay
 principal:alice member tenant:bombay
 
-# Alice is Branch Secretary at Procter
-role_definition:branch-secretary definition role_assignment:ra-001
-principal:alice                  subject    role_assignment:ra-001
-organizational_unit:bombay/procter scope    role_assignment:ra-001
+# ── The role path. SUPPLIED PER CHECK, NEVER STORED. ADR-109 ──
+#
+# Alice is Branch Secretary at Procter, and that role confers
+# member_read. Both lines below are contextual tuples: PostgreSQL
+# resolves them for the permission being checked, with the term
+# window, the clearance precondition and any ACTING cover already
+# applied in the query (A2.7). An assignment that is not effective
+# is simply never supplied, so ADR-070's "inert the moment it
+# expires" holds by construction rather than by a sweeper.
+#
+# Which definition and which scope are PostgreSQL facts and appear
+# nowhere in the graph. The second line's object is the assignment's
+# scope; the permission reaches descendants only where the relation
+# itself propagates (ADR-014).
+principal:alice               subject     role_assignment:ra-001
+role_assignment:ra-001#holder member_read organizational_unit:bombay/procter
 
 # The pool has two authorization parents (DAG)
 organizational_unit:bombay/procter auth_parent resource:bombay/procter-pool
@@ -549,6 +570,42 @@ exactly the weakness found in 8.12 test 2. Each one is the positive twin of a
 DENY: the same relation, on the same object, for a subject who _should_ reach
 it.
 
+### Must ALLOW — the role path (ADR-109)
+
+```txt
+principal:alice            member_read        organizational_unit:bombay/procter
+principal:alice            member_read        organizational_unit:bombay/procter/sub-unit
+```
+
+Both are already listed above and are repeated here for what they now prove.
+Alice holds no direct `member_read` tuple. She is Branch Secretary at Procter,
+and that entire path arrives as **contextual tuples** — resolved from
+PostgreSQL for the permission being checked, with the term window and the
+clearance precondition already applied in the query. The second line adds the
+propagation hop: role → scope → `auth_parent`, which is the whole mechanism in
+one assertion.
+
+Verified against real drift, not merely observed to pass: removing the two
+contextual tuples fails exactly these two assertions and no others.
+
+### Must REFUSE — the grantable set (ADR-110)
+
+Not denials. The model must reject these writes outright.
+
+```txt
+role_assignment:ra-666#holder owner    tenant:bombay
+role_assignment:ra-666#holder admin    tenant:bombay
+role_assignment:ra-666#holder member   tenant:bombay
+role_assignment:ra-666#holder may_use  resource:bombay/procter-pool
+```
+
+Ownership and administration are the privilege-escalation route ADR-078
+forbids, and `admin` propagates through the entire DAG. Membership and
+entitlement reach a person through a membership, never through a job. None of
+the four relations names `role_assignment#holder` in its type restriction, so
+OpenFGA refuses the tuple rather than accepting one that happens not to
+resolve.
+
 ### Must DENY — the invariants
 
 ```txt
@@ -609,10 +666,29 @@ rejected regardless of what else it enables.
    assertions actually run. A test fails if the model differs by
    one character, or if any assertion listed in A1.7 is missing
    from the suite or carries a different expectation.
+8  A role assignment is never a stored tuple. The suite refuses
+   to write one, and supplies the role path as contextual tuples
+   exactly as `internal/authz` does. ADR-109.
+9  A permission is role-grantable if and only if
+   `role_assignment#holder` is in its type restriction here. The
+   suite proves the complement: every relation in its `forbidden`
+   block must be REFUSED by the model, not merely denied. ADR-110.
 ```
 
 Rule 5 is the enforcement point for ADR-018. A type with no tenant path is
 either a platform-plane object or a defect, and the schema must say which.
+
+Rules 8 and 9 exist for the same reason as rule 7, one round later. Rule 8 is
+what keeps ADR-070 true: a stored role tuple outlives the term that justified
+it, and removing it then needs a sweeper — the exact dependency the design
+refuses. Rule 9 is what keeps ADR-078 true: the grantable set is a real
+security boundary, and a boundary that lives in a comment is not one.
+
+**Rule 9's negative form is deliberate.** Asserting that a forbidden role
+tuple produces a DENY would be weaker than it looks: a DENY means the tuple
+was accepted and merely failed to resolve, which one careless edit turns into
+an ALLOW. Requiring the write to be _refused_ means the model itself will not
+hold the tuple at all.
 
 Rule 7 exists because rules 1 to 6 were all obeyed and the model still did
 not parse. A1.2 was wrapped across lines for readability, A1.6 was missing

@@ -17,17 +17,25 @@ Domain services never implement authorization rules. They ask. A service
 containing `if user.role == "admin"` is a defect regardless of whether the
 condition is correct.
 
-### The three-part decision
+### The four-part decision
 
 ```txt
 1  TENANT       is there a tenant ancestor on the path?     mandatory
-2  GRAPH        does a relationship or role reach this?     OpenFGA
-3  VALIDITY     is that relationship currently effective?   PostgreSQL
+2  ROLE         which assignments are effective RIGHT NOW?  PostgreSQL
+3  GRAPH        does a relationship or role reach this?     OpenFGA
+4  VALIDITY     is anything else withholding it?            PostgreSQL
 ```
 
-Part 3 covers term windows, clearance validity, and restrictions. It exists
-because temporal state in the graph would require rewriting tuples on a
-clock, making expiry dependent on a sweeper.
+Part 2 resolves term windows, clearance validity and the restrictions that act
+on the role path, and hands the survivors to part 3 as contextual tuples
+(ADR-109). Part 4 is what remains: principal and person status, and the
+restrictions that withhold a named permission.
+
+The split is not cosmetic. Temporal state in the graph would require rewriting
+tuples on a clock, making expiry sweeper-dependent — but checking it _after_
+the graph does not work either, because `Check` returns a boolean and cannot
+say which of several paths produced it. Resolving before the graph is the only
+ordering in which an expired term is unable to authorize.
 
 ### Permission naming
 
@@ -534,6 +542,8 @@ negative cases:
 5   a role assignment without scope is rejected
 6   an expired term denies at decision time, with no sweeper run
 7   an expired clearance denies at decision time
+6b  a stored role tuple cannot exist to be swept
+7b  a role cannot confer owner, admin, member or entitlement
 8   a lapsed suspension is a row, not a computation over invoices
 9   platform administration alone reaches no tenant object
 10  no permission fails open
@@ -542,6 +552,14 @@ negative cases:
 Test 2 is the sharpest: a national body holding **all five** authority verbs
 must be denied every path to a member record, resource, invoice or unit. It is
 the single test that proves the design's central claim.
+
+Tests 6 and 7 changed character with ADR-109. They are no longer assertions
+that a check denies — they are now assertions that the expired thing was never
+supplied to the graph in the first place, which is a stronger and cheaper
+statement. `6b` and `7b` are their structural companions and run in the model
+suite rather than against the database: `6b` fails if any role tuple appears
+under `tuples:` in the assertion fixture, and `7b` fails if OpenFGA accepts a
+role tuple for a relation outside the grantable set (A1.8 rules 8 and 9).
 
 The strong form is only expressible because `may_administer` and
 `may_read_member_data` are grantable relations that resolve to nothing

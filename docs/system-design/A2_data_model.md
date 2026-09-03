@@ -62,12 +62,23 @@ NO POLICY, because the table carries no tenant_id
     entitlement_grant, membership_dependent, membership_suspension,
     subscription, price_component, charge, charge_component, party,
     policy_definition, policy_binding, consumption_record_option,
-    authorization_outbox
+    authorization_outbox, role_permission, role_required_clearance,
+    office_conferred_role
 
     These are tenant-scoped through a parent row, not by a column, so
     the policy above cannot be written for them. `charge` and
     `charge_component` are the ones that matter: an invoice id alone
     reaches its contents. Known gap, 11.2.
+
+    The three role tables reach their tenant through role_definition
+    or office, both of which carry tenant_id and are themselves
+    policed. Reading them still requires having reached the parent.
+
+PLATFORM-DEFINED, no tenant_id by design
+    restriction_kind_permission — the meaning of a restriction kind
+    cannot vary by tenant, because a restriction may be platform-wide
+    (05.9.9). Readable by every tenant connection; writable by the
+    platform plane only.
 ```
 
 Three tables — `verification`, `clearance`, `audit_event` — have a **nullable**
@@ -520,9 +531,84 @@ CREATE TABLE attendance (
 
 ---
 
-## A2.7 Governance
+## A2.7 Governance and roles
+
+The role tables are what 6.1 step 2 queries. Nothing here is projected into
+OpenFGA: the graph learns of an assignment only as a contextual tuple, for one
+permission, at the moment of a check (ADR-109).
 
 ```sql
+-- A tenant-configurable bundle of system-defined permissions.
+-- ADR-011, ADR-022, ADR-076
+CREATE TABLE role_definition (
+    id            uuid PRIMARY KEY,
+    tenant_id     uuid NOT NULL REFERENCES tenant,
+    code          text NOT NULL,
+    name          text NOT NULL,
+    term_policy   text NOT NULL,   -- PERMANENT|OPTIONAL_TERM|MANDATORY_TERM
+                                   -- ADR-069
+    youth_facing  boolean NOT NULL DEFAULT false,   -- 05.9.3
+    status        text NOT NULL,   -- ACTIVE|RETIRED
+    UNIQUE (tenant_id, code)
+);
+-- Cloned from a template, never linked to one. ADR-079
+
+-- The bundle. `permission` is '<object_type>.<relation>' and must name a
+-- relation whose type restriction includes role_assignment#holder. ADR-110
+CREATE TABLE role_permission (
+    role_definition_id uuid NOT NULL REFERENCES role_definition,
+    permission         text NOT NULL,
+    PRIMARY KEY (role_definition_id, permission)
+);
+
+-- ADR-087. An assignment whose definition requires a clearance the person
+-- does not currently hold is inert, exactly as an expired term is.
+CREATE TABLE role_required_clearance (
+    role_definition_id uuid NOT NULL REFERENCES role_definition,
+    verification_type  text NOT NULL,   -- BACKGROUND_CHECK|REGISTRY_SCREENING
+    PRIMARY KEY (role_definition_id, verification_type)
+);
+
+CREATE TABLE role_assignment (
+    id                   uuid PRIMARY KEY,
+    tenant_id            uuid NOT NULL REFERENCES tenant,
+    role_definition_id   uuid NOT NULL REFERENCES role_definition,
+    subject_principal_id uuid NOT NULL REFERENCES principal,
+    -- ADR-011: an assignment always carries a scope. scope_type must be the
+    -- object type the permission names, so that the contextual tuple lands
+    -- on an object that declares the relation. Reach beyond the scope is the
+    -- graph's business, per-permission. ADR-014
+    scope_type           text NOT NULL,   -- tenant|organizational_unit|
+                                          -- resource|programme|consumption_type
+    scope_id             uuid NOT NULL,
+    valid_from           timestamptz NOT NULL DEFAULT now(),
+    valid_until          timestamptz,
+    holding_type         text NOT NULL DEFAULT 'SUBSTANTIVE',
+                                          -- SUBSTANTIVE|ACTING. ADR-070
+    substantive_assignment_id uuid REFERENCES role_assignment,
+    via_office_holding_id uuid REFERENCES office_holding,
+    granted_by_principal_id uuid NOT NULL REFERENCES principal,
+    decision_record_id   uuid REFERENCES decision_record,
+    revoked_at           timestamptz,
+    CONSTRAINT acting_names_its_substantive CHECK (
+        (holding_type = 'ACTING') = (substantive_assignment_id IS NOT NULL)),
+    CONSTRAINT window_ordered CHECK (
+        valid_until IS NULL OR valid_until > valid_from)
+);
+-- MANDATORY_TERM requires valid_until. Enforced by trigger rather than
+-- CHECK: the policy lives on the referenced role_definition row, which a
+-- CHECK constraint cannot reach. ADR-069
+
+-- The office -> role arrow of 05.6.3, which had no table behind it.
+-- Appointing to an office materializes one role_assignment per conferred
+-- definition, carrying via_office_holding_id; vacating revokes them
+-- together, which is what 05.6.4 means by "atomically". ADR-071
+CREATE TABLE office_conferred_role (
+    office_id          uuid NOT NULL REFERENCES office,
+    role_definition_id uuid NOT NULL REFERENCES role_definition,
+    PRIMARY KEY (office_id, role_definition_id)
+);
+
 CREATE TABLE office (
     id                    uuid PRIMARY KEY,
     tenant_id             uuid NOT NULL REFERENCES tenant,
@@ -709,7 +795,41 @@ CREATE TABLE restriction (
     lifted_at            timestamptz,
     lifted_by_person_id  uuid REFERENCES person
 );
+
+-- What a restriction kind actually withholds. Without this, `kind` was a
+-- label mapping to nothing and 6.1's restriction limb checked nothing at
+-- all. Platform-defined, not tenant-configurable: a restriction imposed in
+-- one association may be platform-wide (05.9.9), so its meaning cannot vary
+-- by tenant. 8.8 requires a denial to name what it withholds, which is why
+-- this is a mapping rather than a blanket deny.
+CREATE TABLE restriction_kind_permission (
+    kind       text NOT NULL,   -- as enumerated in 05.9.4
+    permission text NOT NULL,   -- '<object_type>.<relation>'
+    PRIMARY KEY (kind, permission)
+);
 ```
+
+### What each restriction kind withholds
+
+Two of the four kinds act on the role path and are applied in 6.1 step 2 —
+they suppress assignments rather than permissions, so they need no row here:
+
+```txt
+NO_ROLE_ASSIGNMENT        every assignment is ineffective
+NO_YOUTH_FACING_ROLES     assignments whose definition is youth_facing
+```
+
+The other two withhold named permissions, and are applied in step 4:
+
+```txt
+NO_RESOURCE_ACCESS        resource.may_use, resource.may_book,
+                          consumption_type.may_record
+SUSPENDED_PENDING_REVIEW  the same, and every assignment as well
+```
+
+`SUSPENDED_PENDING_REVIEW` appears in both lists deliberately: standing a
+person down means neither acting in a role nor using the facilities, and
+05.9.4 is explicit that it carries no narrative to distinguish the two.
 
 ---
 
@@ -858,26 +978,30 @@ CREATE TABLE audit_event (
 
 ## A2.11 Where the invariants live
 
-| Invariant                                               | Enforced by                                                |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                       |
-| One active membership per tenant                        | partial unique index                                       |
-| One elevated principal per person                       | partial unique index                                       |
-| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                 |
-| One authority verb per pair                             | unique constraint                                          |
-| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                            |
-| Guardian ≠ minor                                        | `CHECK`                                                    |
-| Affiliation not self-referential                        | `CHECK`                                                    |
-| Tenant isolation                                        | RLS, four documented exemptions                            |
-| No cycles in the DAG                                    | recursive CTE, pre-commit                                  |
-| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`           |
-| One live consumption record per person per type per day | partial unique index                                       |
-| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                          |
-| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103             |
-| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                        |
-| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108 |
-| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises              |
-| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role            |
+| Invariant                                               | Enforced by                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------- |
+| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                          |
+| One active membership per tenant                        | partial unique index                                          |
+| One elevated principal per person                       | partial unique index                                          |
+| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                    |
+| One authority verb per pair                             | unique constraint                                             |
+| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                               |
+| Guardian ≠ minor                                        | `CHECK`                                                       |
+| Affiliation not self-referential                        | `CHECK`                                                       |
+| Tenant isolation                                        | RLS, four documented exemptions                               |
+| No cycles in the DAG                                    | recursive CTE, pre-commit                                     |
+| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`              |
+| One live consumption record per person per type per day | partial unique index                                          |
+| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                             |
+| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103                |
+| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                           |
+| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108    |
+| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises                 |
+| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role               |
+| An ACTING assignment names its substantive one          | `CHECK (holding_type = 'ACTING') = (substantive IS NOT NULL)` |
+| A MANDATORY_TERM assignment has an end date             | trigger; the policy lives on `role_definition`. ADR-069       |
+| A role confers only role-grantable permissions          | trigger on `role_permission` against A1.2's set. ADR-110      |
+| An expired term cannot authorize                        | never supplied to the graph. ADR-109, not a constraint        |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not
@@ -897,7 +1021,20 @@ CREATE INDEX ON verification (subject_type, subject_id, type, status);
 CREATE INDEX ON restriction (person_id) WHERE lifted_at IS NULL;
 CREATE INDEX ON audit_event (tenant_id, occurred_at DESC);
 CREATE INDEX ON consumption_record (tenant_id, subject_person_id, occurred_on);
+
+-- 6.1 step 2 runs on every check. This is the index it must hit.
+CREATE INDEX ON role_assignment (subject_principal_id, tenant_id)
+  WHERE revoked_at IS NULL;
+CREATE INDEX ON role_permission (permission);
+CREATE INDEX ON role_assignment (substantive_assignment_id)
+  WHERE substantive_assignment_id IS NOT NULL;
+CREATE INDEX ON role_assignment (via_office_holding_id)
+  WHERE via_office_holding_id IS NOT NULL;
 ```
+
+`role_assignment (subject_principal_id, ...)` is the one index in this list
+whose absence is a latency regression on **every authorized request**, not
+just on a report. 10 sets a p99 for `check()`; step 2 is now inside it.
 
 Partitioning candidates: `audit_event` monthly, `allocation` by tenant at
 scale, `authorization_outbox` with aggressive archival of dispatched rows.
