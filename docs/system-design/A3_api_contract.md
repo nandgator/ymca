@@ -181,6 +181,13 @@ ORGANIZATION
   POST   /t/{t}/units                              create org unit
   GET    /t/{t}/units/{unit}
 
+CONFIGURATION
+  POST   /t/{t}/entitlement-bundles                define a bundle
+  GET    /t/{t}/entitlement-bundles
+  POST   /t/{t}/entitlement-bundles/{b}/entitles   bundle entitles an object
+  POST   /t/{t}/membership-plans                   define a plan
+  GET    /t/{t}/membership-plans
+
 IDENTITY AND MEMBERSHIP
   POST   /t/{t}/people                             create person
   GET    /t/{t}/units/{unit}/members               list  — scope: unit
@@ -209,6 +216,39 @@ ME
 
 `/me` is what makes one permission-gated app possible: the client renders
 from the permissions it is told it has, rather than from a role it guessed.
+
+### Why configuration is here at all
+
+The slice could not run without it. `membership.plan_id` is `NOT NULL`, so
+admission needs a plan; ADR-107's `covered_member` tuple needs a plan to point
+at; and `consumption_type.may_record` resolves through `entitled` from an
+entitlement bundle. With no endpoint creating a bundle, a plan, or the link
+between them, a member admitted through this API would hold no entitlements
+and could not record a meal — which is the whole of the hostel case (K2, K8).
+The gap was found by trying to build 8.3, not by reading A3.
+
+**Create and read only.** 05.3.2 gives plans a real lifecycle — editing a live
+plan is prohibited, supersession is supported, `CLOSED_TO_NEW` is the common
+real state. None of that is here. A plan can be created and listed; it cannot
+yet be superseded or retired through the API. That is a deferral, logged in
+11.2, not an omission.
+
+### The membership number is supplied, not allocated
+
+```txt
+POST /t/{t}/memberships   { person_id, plan_id, number, ... }
+```
+
+`membership.number` is a **tenant-visible identifier** (05.3.5) and the caller
+supplies it. `UNIQUE (tenant_id, number)` is the entire mechanism; a collision
+is a 409.
+
+Deliberately **not** ADR-103's counter. Gapless allocation exists because a tax
+authority requires an invoice series with no gaps; a membership register has no
+such rule, so that machinery would buy contention for nothing. It also keeps
+each association's own numbering convention intact — the same reasoning that
+settled ADR-107 — and leaves historical numbers importable without a special
+case when B5 arrives.
 
 **Recording for another person is not a different endpoint.** It is the same
 `POST .../records` with a different subject, gated by `may_record_for_other`

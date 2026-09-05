@@ -26,6 +26,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/config"
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
+	"github.com/nandgator/ymca/backend/internal/membership"
 	"github.com/nandgator/ymca/backend/internal/outbox"
 )
 
@@ -109,9 +110,33 @@ func serve(logger *slog.Logger) error {
 		dispatcher.Run(ctx)
 	}()
 
+	// TenantMatch is applied per route, not around the mux: ServeMux only
+	// populates r.PathValue while resolving a specific route, so a
+	// middleware wrapping the mux would see an empty tenant (ADR-105).
 	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/t/{tenant}/me",
-		httpx.TenantMatch(pool, logger)(http.HandlerFunc(handleMe(pool, fga, logger))))
+	tenantRoute := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, httpx.TenantMatch(pool, logger)(h))
+	}
+
+	tenantRoute("GET /api/v1/t/{tenant}/me", handleMe(pool, fga, logger))
+
+	// A3.7 configuration. Without these the slice cannot run: admission
+	// needs a plan, ADR-107's covered_member tuple needs one to point at,
+	// and may_record resolves through `entitled` from a bundle.
+	tenantRoute("POST /api/v1/t/{tenant}/entitlement-bundles",
+		handleCreateBundle(pool, fga, logger))
+	tenantRoute("GET /api/v1/t/{tenant}/entitlement-bundles",
+		handleListBundles(pool, fga, logger))
+	tenantRoute("POST /api/v1/t/{tenant}/entitlement-bundles/{bundle}/entitles",
+		handleEntitle(pool, fga, logger))
+	tenantRoute("POST /api/v1/t/{tenant}/membership-plans",
+		handleCreatePlan(pool, fga, logger))
+	tenantRoute("GET /api/v1/t/{tenant}/membership-plans",
+		handleListPlans(pool, fga, logger))
+	tenantRoute("POST /api/v1/t/{tenant}/consumption-types",
+		handleCreateConsumptionType(pool, fga, logger))
+	tenantRoute("GET /api/v1/t/{tenant}/consumption-types",
+		handleListConsumptionTypes(pool, fga, logger))
 
 	handler := httpx.Chain(mux,
 		httpx.Recover(logger),
@@ -156,9 +181,10 @@ func serve(logger *slog.Logger) error {
 }
 
 // outboxRenderers maps an event type to the tuples the CURRENT model wants
-// for it (ADR-101). Empty until 8.3: no domain event is published yet, and a
-// renderer for an event nothing emits would be untested code claiming to
-// work.
+// for it (ADR-101). The renderers live beside the code that publishes the
+// facts, so adding an event without a renderer is one diff away from being
+// noticed — and if it is not, the dispatcher fails that row loudly rather
+// than skipping it.
 func outboxRenderers() map[string]outbox.Renderer {
-	return map[string]outbox.Renderer{}
+	return membership.Renderers()
 }

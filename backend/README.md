@@ -33,6 +33,8 @@ internal/audit/            8.5's DENY record
 internal/idempotency/      A3.6 — the key is stored with the work it describes
 internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/page/             A3.5 keyset pagination; the cursor is opaque
+internal/membership/       bundles, plans, and their outbox renderers
+internal/consumption/      consumption types (05.10)
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
@@ -334,6 +336,13 @@ Recorded in `A2.1` and `11.2`, not worked around here:
 - **No reverse role query.** "Who holds this permission at this scope" is a
   PostgreSQL query nobody has written. 05.6.7's approval routing needs it;
   ADR-104 and 8.11 mean it must never become a graph query.
+- **Plans can be created and listed, not superseded.** 05.3.2 gives plans a
+  real lifecycle — editing a live plan is prohibited, supersession is
+  supported, `CLOSED_TO_NEW` is the common real state. None of it is
+  reachable through the API yet.
+- **Membership numbers are caller-supplied and unvalidated.** `UNIQUE
+(tenant_id, number)` is the whole mechanism; nothing enforces a format, so
+  two conventions can coexist in one tenant.
 - **Nothing sweeps `idempotency_key`.** The index for it exists; the sweep
   does not. Keys accumulate until something removes them.
 - **The renderer registry is empty.** `outboxRenderers()` in `cmd/api` gains
