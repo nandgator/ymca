@@ -13,6 +13,7 @@ where a file here records a deviation explicitly.
 ```txt
 migrations/0001_init.sql   the full A2 schema, 54 tables, RLS on 34
 migrations/0002_roles.sql  A2.7 roles, A2.8 restriction mapping, RLS on 2
+migrations/0003_idempotency.sql  A3.6's store, which A2 had never defined
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)
@@ -29,6 +30,8 @@ internal/auth/dev/         the development provider — //go:build dev only
 internal/authz/            6.1's four-step check, and the OpenFGA client
 internal/authz/roles.go    step 2 — effective assignments, per check
 internal/audit/            8.5's DENY record
+internal/idempotency/      A3.6 — the key is stored with the work it describes
+internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
@@ -173,6 +176,26 @@ The last one is the load-bearing one. If any role tuple had reached the
 store, the check without contextual tuples would pass, and the expiry
 guarantee above would be resting on a sweeper nobody has written.
 
+`TestOutbox_AgainstRealCluster` proves ADR-101, whose whole reason for
+existing is a race that a careful implementation still gets wrong:
+
+```txt
+a queued fact is projected
+redelivery is not an error          at-least-once (8.9) must not wedge
+a voided row is never dispatched
+a grant in flight cannot outlive the revocation      <- the one that matters
+an unrenderable row records its attempt and stays pending
+```
+
+The fourth is ADR-101's actual subject. A grant transaction that began before
+a revocation and commits after it must not slip a row past the void. Removing
+the advisory lock makes that test report exactly the historical failure:
+`Void completed while the grant held the fence lock (voided 0 rows)` — the
+revocation deletes a tuple that does not exist yet, reports success, and the
+dispatcher then puts it back. The record notes the first draft of this fix had
+only the row lock and was wrong; this is what stops the second draft being
+wrong the same way.
+
 **Every one of these was drift-tested**, per the handoff's standing rule:
 deleting the term-window clause fails exactly the expired and not-yet-begun
 cases, deleting the clearance clause fails exactly the clearance case, and
@@ -310,3 +333,11 @@ Recorded in `A2.1` and `11.2`, not worked around here:
 - **No reverse role query.** "Who holds this permission at this scope" is a
   PostgreSQL query nobody has written. 05.6.7's approval routing needs it;
   ADR-104 and 8.11 mean it must never become a graph query.
+- **Nothing sweeps `idempotency_key`.** The index for it exists; the sweep
+  does not. Keys accumulate until something removes them.
+- **The renderer registry is empty.** `outboxRenderers()` in `cmd/api` gains
+  an entry per domain event in 8.3. Until then the dispatcher runs and finds
+  nothing, which is correct — no domain event is published yet.
+- **No dispatcher metrics.** 7.4 makes undispatched rows older than a
+  threshold an operational alert. `attempts` and `last_error` are recorded
+  per row; nothing watches them (C4).

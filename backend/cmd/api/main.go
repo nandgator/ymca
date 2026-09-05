@@ -26,6 +26,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/config"
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
+	"github.com/nandgator/ymca/backend/internal/outbox"
 )
 
 // commands holds CLI subcommands beyond "serve the API", registered by
@@ -89,6 +90,25 @@ func serve(logger *slog.Logger) error {
 		return fmt.Errorf("open auth provider %q: %w", cfg.AuthProvider, err)
 	}
 
+	// The outbox dispatcher (ADR-101, 8.3). It runs in-process because there
+	// is one deployment unit today; SKIP LOCKED means several replicas drain
+	// the table safely, so extracting it to its own binary is a deployment
+	// decision rather than a correctness one.
+	//
+	// outboxRenderers is empty until 8.3 publishes a domain event. That is
+	// deliberate: an unknown event_type fails its row loudly and leaves it
+	// pending for 7.4's staleness alert, rather than being skipped.
+	fgaWriter, err := outbox.NewFGAWriter(cfg)
+	if err != nil {
+		return fmt.Errorf("open outbox writer: %w", err)
+	}
+	dispatcher := outbox.New(pool.Pool(), fgaWriter, outboxRenderers(), logger)
+	dispatcherDone := make(chan struct{})
+	go func() {
+		defer close(dispatcherDone)
+		dispatcher.Run(ctx)
+	}()
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/t/{tenant}/me",
 		httpx.TenantMatch(pool, logger)(http.HandlerFunc(handleMe(pool, fga, logger))))
@@ -122,8 +142,23 @@ func serve(logger *slog.Logger) error {
 		logger.Info("api: shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		err := srv.Shutdown(shutdownCtx)
+		// Run returns on ctx cancellation. Waiting for it means an in-flight
+		// dispatch finishes its transaction rather than being cut off between
+		// the OpenFGA write and the row's dispatched_at, which would leave
+		// the row pending and redeliver a tuple that is already there —
+		// harmless, but only because WriteTuples tolerates redelivery.
+		<-dispatcherDone
+		return err
 	case err := <-errCh:
 		return err
 	}
+}
+
+// outboxRenderers maps an event type to the tuples the CURRENT model wants
+// for it (ADR-101). Empty until 8.3: no domain event is published yet, and a
+// renderer for an event nothing emits would be untested code claiming to
+// work.
+func outboxRenderers() map[string]outbox.Renderer {
+	return map[string]outbox.Renderer{}
 }

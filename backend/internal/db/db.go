@@ -40,10 +40,22 @@ func (d *DB) Health(ctx context.Context) error {
 	return nil
 }
 
-// Pool exposes the underlying pool for the handful of tables 8.2 exempts
-// from row-level security — person, principal, guardianship, restriction —
-// which carry no tenant_id and so need no InTenantTx. Every other query
-// must go through InTenantTx instead of this.
+// Pool exposes the underlying pool for the tables that carry no tenant_id
+// and so need no InTenantTx:
+//
+//	person, principal, guardianship, restriction   8.2's RLS exemptions,
+//	                                               deliberately global
+//	authorization_outbox                           spans tenants by
+//	                                               construction (A2.1)
+//
+// `authorization_outbox` is the one a reader might not expect. It has no
+// tenant_id and therefore no policy, because the dispatcher drains the whole
+// table: a dispatcher that had to name a tenant could not do its job. That is
+// why internal/outbox takes a *pgxpool.Pool rather than a *DB.
+//
+// Every other query must go through InTenantTx instead of this. A new caller
+// reaching for Pool() for anything not listed above is almost certainly a
+// defect.
 func (d *DB) Pool() *pgxpool.Pool {
 	return d.pool
 }
