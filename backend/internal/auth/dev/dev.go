@@ -72,10 +72,16 @@ type header struct {
 }
 
 // claims is D3's fixed claim set: sub (the IdP subject), tenant (uuid),
-// iat, exp. Nothing else is read or trusted.
+// plane, iat, exp. Nothing else is read or trusted.
+//
+// Both tenant and plane carry omitempty so that the two kinds of token are
+// structurally distinct rather than distinguished by an empty string: a
+// tenant token carries "tenant" and no "plane", a platform token carries
+// "plane" and no "tenant". Neither ever carries both (ADR-111).
 type claims struct {
 	Sub    string `json:"sub"`
-	Tenant string `json:"tenant"`
+	Tenant string `json:"tenant,omitempty"`
+	Plane  string `json:"plane,omitempty"`
 	IAT    int64  `json:"iat"`
 	EXP    int64  `json:"exp"`
 }
@@ -126,6 +132,7 @@ func (a *authenticator) Authenticate(ctx context.Context, token string) (auth.Pr
 		PersonID: personID,
 		Kind:     auth.Kind(kind),
 		TenantID: c.Tenant,
+		Plane:    auth.Plane(c.Plane),
 	}, nil
 }
 
@@ -177,7 +184,27 @@ func verify(token string, secret []byte, now time.Time) (claims, error) {
 	if err := pdec.Decode(&c); err != nil {
 		return claims{}, errMalformed
 	}
-	if c.Sub == "" || c.Tenant == "" {
+	if c.Sub == "" {
+		return claims{}, errMalformed
+	}
+
+	// ADR-111. The tenant plane is the absent case, so a token that says
+	// nothing about its plane is a tenant token and must name its tenant —
+	// which is exactly the rule this package enforced before the platform
+	// plane existed, unchanged. A platform token must name NO tenant: one
+	// carrying both would be a credential claiming authority in two planes,
+	// and A3.1 gives it no meaning. Any other value of plane is refused
+	// rather than treated as one or the other.
+	switch auth.Plane(c.Plane) {
+	case auth.PlaneTenant:
+		if c.Tenant == "" {
+			return claims{}, errMalformed
+		}
+	case auth.PlanePlatform:
+		if c.Tenant != "" {
+			return claims{}, errMalformed
+		}
+	default:
 		return claims{}, errMalformed
 	}
 

@@ -5,6 +5,7 @@ package dev
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -190,4 +191,141 @@ func splitToken(t *testing.T, tok string) []string {
 		t.Fatalf("token %q does not have 3 parts", tok)
 	}
 	return parts
+}
+
+// ─────────────────────────────────────────────────────────────
+// ADR-111 — the plane, and the polarity that makes it safe
+// ─────────────────────────────────────────────────────────────
+
+// TestPlanePolarity is the test that catches the constants being flipped.
+//
+// It asserts the one property ADR-111 actually rests on: the ZERO value of
+// auth.Plane is the tenant plane. Everything else in this file could pass
+// with PlanePlatform = "" — a Principal nobody finished constructing would
+// then hold platform authority, and no other test would notice, because
+// every other test builds its principal deliberately. This one asserts the
+// accident.
+func TestPlanePolarity(t *testing.T) {
+	var zero auth.Principal
+	if zero.Plane != auth.PlaneTenant {
+		t.Fatalf("the zero Principal has plane %q; ADR-111 requires the zero "+
+			"value to be the tenant plane", zero.Plane)
+	}
+	if zero.Plane == auth.PlanePlatform {
+		t.Fatal("the zero Principal is a PLATFORM principal — a partially " +
+			"constructed credential now holds platform authority nobody granted")
+	}
+	if auth.PlanePlatform == "" {
+		t.Fatal("PlanePlatform is the empty string, so it is also the zero " +
+			"value; ADR-111's polarity is inverted")
+	}
+}
+
+func mintPlatform(t *testing.T, sub string, iat, exp time.Time) string {
+	t.Helper()
+	tok, err := MintPlatform([]byte(testSecret), sub, iat, exp)
+	if err != nil {
+		t.Fatalf("mint platform: %v", err)
+	}
+	return tok
+}
+
+func TestAuthenticate_PlatformToken(t *testing.T) {
+	a := newAuthenticator(t, fakeRow{id: "p9", personID: "person9", kind: "STAFF", status: "ACTIVE"})
+	now := time.Now()
+	tok := mintPlatform(t, "platform-op", now.Add(-time.Minute), now.Add(time.Hour))
+
+	principal, err := a.Authenticate(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if principal.Plane != auth.PlanePlatform {
+		t.Fatalf("plane = %q, want %q", principal.Plane, auth.PlanePlatform)
+	}
+	// A platform credential names no tenant. If it ever did, TenantMatch
+	// would have something to compare and A3.1's separation would be a
+	// matter of routing rather than of the credential.
+	if principal.TenantID != "" {
+		t.Fatalf("platform principal names tenant %q; it must name none", principal.TenantID)
+	}
+}
+
+// A tenant token is unchanged by the plane's arrival: it carries no plane
+// and still must name a tenant.
+func TestAuthenticate_TenantTokenHasTenantPlane(t *testing.T) {
+	a := newAuthenticator(t, fakeRow{id: "p1", personID: "person1", kind: "STAFF", status: "ACTIVE"})
+	now := time.Now()
+	tok := mint(t, "sub-1", "tenant-1", now.Add(-time.Minute), now.Add(time.Hour))
+
+	principal, err := a.Authenticate(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if principal.Plane != auth.PlaneTenant {
+		t.Fatalf("plane = %q, want the tenant plane", principal.Plane)
+	}
+}
+
+// A credential claiming both planes has no meaning under A3.1, so it is
+// refused rather than resolved to one of them.
+func TestAuthenticate_PlatformTokenNamingATenantIsRefused(t *testing.T) {
+	a := newAuthenticator(t, fakeRow{id: "p9", personID: "person9", kind: "STAFF", status: "ACTIVE"})
+	now := time.Now()
+
+	tok := signClaims(t, claims{
+		Sub:    "platform-op",
+		Tenant: "tenant-1",
+		Plane:  string(auth.PlanePlatform),
+		IAT:    now.Add(-time.Minute).Unix(),
+		EXP:    now.Add(time.Hour).Unix(),
+	})
+	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// An unrecognised plane is refused outright rather than falling back to
+// either plane — the same no-agility rule the JWT header follows.
+func TestAuthenticate_UnknownPlaneIsRefused(t *testing.T) {
+	a := newAuthenticator(t, fakeRow{id: "p9", personID: "person9", kind: "STAFF", status: "ACTIVE"})
+	now := time.Now()
+
+	tok := signClaims(t, claims{
+		Sub:   "platform-op",
+		Plane: "SUPERUSER",
+		IAT:   now.Add(-time.Minute).Unix(),
+		EXP:   now.Add(time.Hour).Unix(),
+	})
+	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// A token with neither plane nor tenant is malformed: the tenant plane is
+// the absent case, and a tenant token must name its tenant.
+func TestAuthenticate_NoPlaneAndNoTenantIsRefused(t *testing.T) {
+	a := newAuthenticator(t, fakeRow{id: "p1", personID: "person1", kind: "STAFF", status: "ACTIVE"})
+	now := time.Now()
+
+	tok := signClaims(t, claims{
+		Sub: "sub-1",
+		IAT: now.Add(-time.Minute).Unix(),
+		EXP: now.Add(time.Hour).Unix(),
+	})
+	if _, err := a.Authenticate(context.Background(), tok); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// signClaims mints an arbitrary claim set, including ones Mint and
+// MintPlatform deliberately refuse to produce. That is the point: these
+// tests are about what verify ACCEPTS, and a shape the minters cannot make
+// is exactly the shape an attacker would hand-roll.
+func signClaims(t *testing.T, c claims) string {
+	t.Helper()
+	payload, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	return sign([]byte(testSecret), payload)
 }

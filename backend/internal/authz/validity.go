@@ -104,3 +104,53 @@ func checkRestriction(ctx context.Context, tx pgx.Tx, principalID, permission st
 	}
 	return validityResult{Valid: true}, nil
 }
+
+// checkValidityPlatform is step 4 for the platform plane (platform.go).
+//
+// Principal and person status apply unchanged: both tables are exempt from
+// row-level security (8.2) and global, so the same query is correct with no
+// tenant set. Only the restriction limb differs, and it differs in meaning
+// rather than in mechanism — see checkRestrictionPlatform.
+func checkValidityPlatform(ctx context.Context, tx pgx.Tx, principalID, permission string) (validityResult, error) {
+	if result, err := checkPrincipalAndPersonStatus(ctx, tx, principalID); err != nil || !result.Valid {
+		return result, err
+	}
+	return checkRestrictionPlatform(ctx, tx, principalID, permission)
+}
+
+// checkRestrictionPlatform is the restriction limb with no tenant.
+//
+// It matches only PLATFORM-WIDE restrictions — those with a NULL tenant_id
+// (05.9.9). This is not a workaround for the missing tenant context; it is
+// what the question means on this plane. A restriction naming a tenant says
+// "this person is restricted THERE", and a platform-lifecycle action happens
+// nowhere in particular, so a tenant-scoped restriction has nothing to say
+// about it. Only a restriction that applies everywhere can bear on it.
+//
+// The tenant-plane checkRestriction cannot simply be reused: its final
+// clause reads current_setting('app.tenant_id')::uuid, which RAISES rather
+// than returning NULL when no tenant is set — A2.1's fail-closed behaviour,
+// working as intended, in a place where there is deliberately no tenant.
+func checkRestrictionPlatform(ctx context.Context, tx pgx.Tx, principalID, permission string) (validityResult, error) {
+	var restricted bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM restriction r
+			JOIN principal p ON p.person_id = r.person_id
+			JOIN restriction_kind_permission rkp ON rkp.kind = r.kind
+			WHERE p.id = $1::uuid
+			  AND rkp.permission = $2
+			  AND r.lifted_at IS NULL
+			  AND (r.expires_at IS NULL OR r.expires_at > now())
+			  AND r.tenant_id IS NULL
+		)
+	`, principalID, permission).Scan(&restricted)
+	if err != nil {
+		return validityResult{}, fmt.Errorf("load platform restriction: %w", err)
+	}
+	if restricted {
+		return validityResult{Reason: "restricted:" + permission}, nil
+	}
+	return validityResult{Valid: true}, nil
+}

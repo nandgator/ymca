@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nandgator/ymca/backend/internal/auth"
 	"github.com/nandgator/ymca/backend/internal/httpx"
@@ -253,4 +254,108 @@ func indexFold(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// fakeExecer stands in for the pool PlatformOnly audits through. Recording
+// the call is the point: a refusal that is not audited is a refusal nobody
+// can later prove happened, and platform_audit_event is the only trail the
+// platform plane has (ADR-112).
+type fakeExecer struct {
+	called bool
+	sql    string
+}
+
+func (f *fakeExecer) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	f.called = true
+	f.sql = sql
+	return pgconn.CommandTag{}, nil
+}
+
+// TestPlatformOnly_RefusesTenantCredential is the test the INTEGRATION test
+// could not be.
+//
+// Removing PlatformOnly from the route does not change the status code an
+// end-to-end test sees: authz.CheckPlatform's step 1 independently refuses a
+// tenant principal, so the request is still a 403 and an integration test
+// asserting only the status passes with the gate gone. Defence in depth is
+// working there, but it means an end-to-end assertion cannot tell whether
+// this middleware is wired at all. This test exercises the middleware
+// directly, so it fails when the gate stops gating.
+func TestPlatformOnly_RefusesTenantCredential(t *testing.T) {
+	exec := &fakeExecer{}
+	mw := httpx.PlatformOnly(exec, testLogger())
+	h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler should not run for a tenant credential")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/platform/tenants", nil)
+	principal := auth.Principal{ID: "p1", TenantID: "tenant-1"} // Plane zero = tenant
+	req = req.WithContext(contextWithPrincipal(req.Context(), principal))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	code, _ := decodeError(t, rec.Body.Bytes())
+	if code != "forbidden" {
+		t.Fatalf("code = %q, want forbidden", code)
+	}
+	if !exec.called {
+		t.Fatal("the refusal was not written to platform_audit_event")
+	}
+	if !containsFold(exec.sql, "platform_audit_event") {
+		t.Fatalf("audited to the wrong table: %q", exec.sql)
+	}
+}
+
+func TestPlatformOnly_AdmitsPlatformCredential(t *testing.T) {
+	exec := &fakeExecer{}
+	mw := httpx.PlatformOnly(exec, testLogger())
+	called := false
+	h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/platform/tenants", nil)
+	principal := auth.Principal{ID: "p1", Plane: auth.PlanePlatform}
+	req = req.WithContext(contextWithPrincipal(req.Context(), principal))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("handler did not run for a platform credential")
+	}
+	if exec.called {
+		t.Fatal("an admitted request must not be audited as a refusal")
+	}
+}
+
+// The other half of ADR-111's exclusive pair: TenantMatch must refuse a
+// platform credential explicitly, not merely as a side effect of an empty
+// TenantID failing a string comparison.
+func TestTenantMatch_RefusesPlatformCredential(t *testing.T) {
+	runner := &fakeTxRunner{}
+	mw := httpx.TenantMatch(runner, testLogger())
+	h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler should not run for a platform credential")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/t/tenant-1/me", nil)
+	req.SetPathValue("tenant", "tenant-1")
+	// Deliberately given a matching TenantID: if the plane check were
+	// removed, this request would sail through the comparison below it.
+	principal := auth.Principal{ID: "p1", TenantID: "tenant-1", Plane: auth.PlanePlatform}
+	req = req.WithContext(contextWithPrincipal(req.Context(), principal))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	code, _ := decodeError(t, rec.Body.Bytes())
+	if code != "forbidden" {
+		t.Fatalf("code = %q, want forbidden", code)
+	}
 }

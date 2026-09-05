@@ -27,6 +27,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
+	"github.com/nandgator/ymca/backend/internal/organization"
 	"github.com/nandgator/ymca/backend/internal/outbox"
 )
 
@@ -96,9 +97,8 @@ func serve(logger *slog.Logger) error {
 	// the table safely, so extracting it to its own binary is a deployment
 	// decision rather than a correctness one.
 	//
-	// outboxRenderers is empty until 8.3 publishes a domain event. That is
-	// deliberate: an unknown event_type fails its row loudly and leaves it
-	// pending for 7.4's staleness alert, rather than being skipped.
+	// An unknown event_type fails its row loudly and leaves it pending for
+	// 7.4's staleness alert, rather than being skipped.
 	fgaWriter, err := outbox.NewFGAWriter(cfg)
 	if err != nil {
 		return fmt.Errorf("open outbox writer: %w", err)
@@ -117,6 +117,13 @@ func serve(logger *slog.Logger) error {
 	tenantRoute := func(pattern string, h http.HandlerFunc) {
 		mux.Handle(pattern, httpx.TenantMatch(pool, logger)(h))
 	}
+
+	// A3.7's platform plane. It sits behind PlatformOnly rather than
+	// TenantMatch: there is no {tenant} to match, and a tenant-bound
+	// credential must be refused here just as a platform credential is
+	// refused on a tenant route (ADR-111). The two gates are exclusive.
+	mux.Handle("POST /api/v1/platform/tenants",
+		httpx.PlatformOnly(pool.Pool(), logger)(handleCreateTenant(pool, fga, logger)))
 
 	tenantRoute("GET /api/v1/t/{tenant}/me", handleMe(pool, fga, logger))
 
@@ -186,5 +193,21 @@ func serve(logger *slog.Logger) error {
 // noticed — and if it is not, the dispatcher fails that row loudly rather
 // than skipping it.
 func outboxRenderers() map[string]outbox.Renderer {
-	return membership.Renderers()
+	all := make(map[string]outbox.Renderer)
+	for _, set := range []map[string]outbox.Renderer{
+		membership.Renderers(),
+		organization.Renderers(),
+	} {
+		for event, render := range set {
+			if _, dup := all[event]; dup {
+				// Two packages claiming one event type would mean the
+				// dispatcher renders whichever won the map iteration — a
+				// silent, order-dependent choice between two meanings of
+				// the same fact. Refuse at start-up instead.
+				panic("outbox: two renderers registered for event " + event)
+			}
+			all[event] = render
+		}
+	}
+	return all
 }

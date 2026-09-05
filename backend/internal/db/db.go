@@ -45,8 +45,14 @@ func (d *DB) Health(ctx context.Context) error {
 //
 //	person, principal, guardianship, restriction   8.2's RLS exemptions,
 //	                                               deliberately global
+//	tenant                                         has no tenant_id to be
+//	                                               policed by; it IS the
+//	                                               tenant (A2.2)
 //	authorization_outbox                           spans tenants by
 //	                                               construction (A2.1)
+//	platform_audit_event                           platform plane; no
+//	                                               tenant exists to name
+//	                                               (ADR-112)
 //
 // `authorization_outbox` is the one a reader might not expect. It has no
 // tenant_id and therefore no policy, because the dispatcher drains the whole
@@ -88,6 +94,45 @@ func (d *DB) InTenantTx(ctx context.Context, tenantID string, fn func(pgx.Tx) er
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		return fmt.Errorf("db: set tenant context: %w", err)
 	}
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit tx: %w", err)
+	}
+	return nil
+}
+
+// InTx runs fn inside a transaction that names NO tenant.
+//
+// It exists for the platform plane (ADR-111, ADR-113) and for the tables
+// Pool() lists above — the ones with no tenant_id and therefore no policy.
+// Provisioning a tenant is the motivating case: tenant, person, principal
+// and authorization_outbox are all unpoliced, and there is no tenant
+// context to run inside because the tenant is what is being created.
+//
+// It is NOT a way around InTenantTx, and it cannot quietly become one. A
+// query it runs against any policied table raises
+//
+//	ERROR: invalid input syntax for type uuid: ""
+//
+// because the policy reads current_setting('app.tenant_id') with missing_ok
+// defaulted to false and finds the empty string. That is loud and
+// fail-closed, exactly as A2.1 intends, and it must not be softened — in
+// particular do not "fix" it by setting app.tenant_id to a zero uuid or by
+// catching that error, either of which would turn a refusal into a silently
+// empty result.
+//
+// A reviewer seeing a new caller of InTx should ask which of Pool()'s
+// tables it touches. If the answer is none of them, it is a defect.
+func (d *DB) InTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once committed
 
 	if err := fn(tx); err != nil {
 		return err

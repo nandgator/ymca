@@ -20,21 +20,23 @@ fga/model.fga              A1.2, reformatted (see below)
 fga/assertions.yaml        A1.6 fixture + A1.7 assertions, executable
 fga/embed.go               go:embed and the assertion parser
 fga/sync_test.go           A1.8 rules 7-9, machine-checked
-fga/grantable_test.go      A1.8 rule 10 — the model vs migration 0002
+fga/grantable_test.go      A1.8 rule 10 — the model vs every migration
 cmd/fga/                   applies the model, runs the assertions
-cmd/api/                   the HTTP server, and GET /me
+cmd/api/                   the HTTP server, /me, configuration, platform
 internal/config/           environment configuration
 internal/db/               the pool, and the tenant transaction (8.2)
 internal/auth/             the ADR-106 port and its provider registry
 internal/auth/dev/         the development provider — //go:build dev only
 internal/authz/            6.1's four-step check, and the OpenFGA client
 internal/authz/roles.go    step 2 — effective assignments, per check
+internal/authz/platform.go the platform plane's three-step check (ADR-111)
 internal/audit/            8.5's DENY record
 internal/idempotency/      A3.6 — the key is stored with the work it describes
 internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/page/             A3.5 keyset pagination; the cursor is opaque
 internal/membership/       bundles, plans, and their outbox renderers
 internal/consumption/      consumption types (05.10)
+internal/organization/     tenants and their first owner (ADR-113)
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
@@ -43,7 +45,7 @@ internal/httpx/            the middleware chain, A3.4's errors
 ```txt
 compose.yaml     not needed — postgres and openfga already run under podman
 Dockerfile       not needed until there is something to deploy
-internal/organization  identity  finance      the rest of 8.3
+identity  finance                            the rest of 8.3
 ```
 
 `membership/` and `consumption/` now exist and hold what 8.3's configuration
@@ -109,7 +111,7 @@ podman exec postgres psql -U pgadmin -d postgres \
 
 ```sh
 go run ./cmd/fga apply      # write the model to a durable store
-go run ./cmd/fga test       # throwaway store, fixture, 31 assertions
+go run ./cmd/fga test       # throwaway store, fixture, 40 assertions
 ```
 
 `fga test` is the CI command. It creates its own store, applies the model,
@@ -123,11 +125,42 @@ non-zero, as A1.8 rule 4 requires.
 go run ./cmd/api                 # serve on YMCA_HTTP_ADDR
 ```
 
-One route so far, `GET /api/v1/t/{tenant}/me` (`A3.7`, `A3.9`): who the caller
-is, and which of four tenant-scoped permissions they hold. Each is a full 6.1
-check against the tenant named in the path — the endpoint reports no
-object-scoped permission, deliberately, because a `/me` that enumerated them
-would be the reverse index `ADR-104` and `8.11` exist to prevent.
+`GET /api/v1/t/{tenant}/me` (`A3.7`, `A3.9`) reports who the caller is and
+which of five tenant-scoped permissions they hold. Each is a full 6.1 check
+against the tenant named in the path — the endpoint reports no object-scoped
+permission, deliberately, because a `/me` that enumerated them would be the
+reverse index `ADR-104` and `8.11` exist to prevent. Beside it are A3.7's
+configuration endpoints (bundles, plans, consumption types) and one
+platform-plane route.
+
+### The two planes
+
+`A3.1` gives the API two planes, and `ADR-111` makes which one a credential
+belongs to a property of the credential rather than of the route:
+
+```txt
+/api/v1/t/{tenant}/...   tenant plane     behind httpx.TenantMatch
+/api/v1/platform/...     platform plane   behind httpx.PlatformOnly
+```
+
+A request satisfies exactly one gate, never both and never neither. A
+tenant-bound credential is refused at a platform route and a platform
+credential is refused at a tenant route, both before any handler runs.
+
+**The polarity is the load-bearing part.** `auth.PlaneTenant` is the zero
+value, so a `Principal` whose plane was never assigned comes out tenant-bound
+rather than holding platform authority nobody granted it — the same argument
+`ADR-106` makes for the `dev` build tag, in a second place where a default is
+reachable by accident.
+
+`POST /api/v1/platform/tenants` provisions a tenant **and its first owner**
+together (`ADR-113`). It cannot be two calls: every write past that point
+authorizes through `admin` on the tenant, and `tenant.admin` is
+`[principal] or owner`, so a tenant created without an owner principal is one
+nobody can ever administer — and it would return 201 all the same. That
+silence is the failure the integration test targets, which is why the test
+asserts a successful tenant-plane write by the new owner rather than the shape
+of the provisioning response.
 
 **The development authenticator is behind two independent gates** (`ADR-106`).
 It compiles only under `-tags dev`, and even then only starts when
@@ -137,8 +170,14 @@ quietly choosing one.
 
 ```sh
 go build -tags dev ./cmd/api
-go run  -tags dev ./cmd/api mint-token <idp-subject> <tenant-uuid>
+go run  -tags dev ./cmd/api mint-token          <idp-subject> <tenant-uuid>
+go run  -tags dev ./cmd/api mint-platform-token <idp-subject>
 ```
+
+`mint-platform-token` is a separate command rather than `mint-token` with the
+tenant left off, and `dev.MintPlatform` is a separate function from
+`dev.Mint` for the same reason: `mint-token` still refuses an empty tenant, so
+platform authority is never what you get by omitting an argument.
 
 `mint-token` carries the same build tag as the provider, so a deployment build
 can no more issue a credential than it can accept one. The token it prints is
@@ -153,10 +192,23 @@ curl -sS localhost:8000/api/v1/t/$TENANT/me \
 ### Tests
 
 ```sh
-go test ./...                              # unit, no services needed
-go test -tags dev ./...                    # adds the dev provider's own tests
-go test -tags 'integration dev' ./...      # needs postgres and openfga running
+go test ./...                                   # unit, no services needed
+go test -tags dev ./...                         # adds the dev provider's tests
+go test -tags 'integration dev' -p 1 ./...      # needs postgres and openfga
 ```
+
+**`-p 1` is required, not a preference.** The outbox dispatcher drains the
+whole `authorization_outbox` table by design — a dispatcher that had to name a
+tenant could not do its job — so two packages running dispatchers against one
+shared cluster steal each other's rows. Without `-p 1`, `internal/outbox`
+intermittently fails with `no renderer for event type
+"EntitlementBundleCreated"`: it picked up a row `cmd/api`'s tests had
+enqueued, and its own renderer map does not know that event.
+
+The failure is intermittent, which is worse than a consistent one — it passed
+three runs in a row before appearing. It is a property of testing a global
+queue against a single shared database, not a defect in the dispatcher, and
+serializing the packages is the accurate fix rather than a workaround.
 
 The integration tests use the environment above and **fail rather than skip**
 when a variable is missing: a test that passes because it never ran is worse

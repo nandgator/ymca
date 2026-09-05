@@ -27,6 +27,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
+	"github.com/nandgator/ymca/backend/internal/organization"
 	"github.com/nandgator/ymca/backend/internal/page"
 )
 
@@ -83,7 +84,8 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 	case errors.Is(err, membership.ErrNotFound), errors.Is(err, consumption.ErrNotFound):
 		httpx.WriteError(w, httpx.CodeNotFound, "not found")
 	case errors.Is(err, page.ErrInvalidCursor), errors.Is(err, page.ErrInvalidLimit),
-		errors.Is(err, membership.ErrInvalidEntitledType):
+		errors.Is(err, membership.ErrInvalidEntitledType),
+		errors.Is(err, organization.ErrOwnerSubjectTaken):
 		// A3.4: these name a value the caller supplied, so echoing it
 		// discloses nothing they did not already send.
 		httpx.WriteError(w, httpx.CodeInvalidRequest, err.Error())

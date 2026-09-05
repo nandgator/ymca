@@ -24,6 +24,29 @@ const (
 	KindElevated Kind = "ELEVATED"
 )
 
+// Plane is which of A3.1's two planes a credential is for (ADR-111).
+//
+// The polarity is the load-bearing part, not the presence of the field.
+// PlaneTenant is the ZERO VALUE, deliberately: a Principal whose Plane was
+// never assigned — a partially-filled struct literal, a test fixture, an
+// Authenticator implementation that forgets to set it — must come out
+// ordinary and tenant-bound, never holding platform authority nobody
+// granted it.
+//
+// This is ADR-106's argument for the `dev` build tag applied a second time:
+// a forgotten build flag must yield a binary WITHOUT the development
+// authenticator, and a forgotten plane must yield a principal WITHOUT
+// platform authority. The accidental case is the safe one. Do not "tidy"
+// this by giving PlaneTenant an explicit string value — that would make the
+// zero value neither plane, and every construction site would then have to
+// remember, which is the property this design refuses to depend on.
+type Plane string
+
+const (
+	PlaneTenant   Plane = ""
+	PlanePlatform Plane = "PLATFORM"
+)
+
 // Principal is who is making the request, resolved from a credential by an
 // Authenticator. A2.3's principal.id is Principal.ID; the subject of every
 // OpenFGA tuple and check is "principal:" + Principal.ID.
@@ -34,8 +57,12 @@ type Principal struct {
 	// TenantID is the tenant the credential itself names (A3.2). httpx
 	// compares it against the tenant in the request path before routing
 	// (ADR-105) — that comparison, not this field alone, is what enforces
-	// A3.1.
+	// A3.1. Empty for a platform credential, which names no tenant.
 	TenantID string
+	// Plane is A3.1's plane (ADR-111). A request satisfies exactly one of
+	// httpx.TenantMatch and httpx.PlatformOnly, never both and never
+	// neither.
+	Plane Plane
 }
 
 // ErrUnauthenticated is returned by an Authenticator for any credential it

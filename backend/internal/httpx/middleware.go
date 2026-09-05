@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nandgator/ymca/backend/internal/audit"
 	"github.com/nandgator/ymca/backend/internal/auth"
@@ -230,6 +231,65 @@ type tenantTxRunner interface {
 	InTenantTx(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error
 }
 
+// platformExecer is the minimum internal/db this file needs to record a
+// platform-plane refusal — narrowed here for the same reason
+// tenantTxRunner is. *pgxpool.Pool satisfies it, so callers pass
+// db.Pool(): platform_audit_event has no tenant_id and no policy, so
+// there is nothing for InTenantTx to set (ADR-112).
+type platformExecer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// PlatformOnly is the platform half of ADR-111's pair. It admits a request
+// only if the credential is a platform credential.
+//
+// A tenant-bound credential reaching a platform route is refused here,
+// before any handler runs. A3.1's invariant 9 has always said a
+// platform-plane route reaching a tenant object is a defect; this is the
+// converse, which nothing stated until R10 — a tenant credential must not
+// reach the platform plane either. The two gates are mutually exclusive: a
+// request satisfies exactly one of PlatformOnly and TenantMatch, never both
+// and never neither.
+//
+// The refusal is 403 rather than 404. The platform routes are a fixed,
+// public part of the API surface (A3.1) — their existence is not the
+// information 8.8 protects, and pretending they are absent would make an
+// operator's own misconfiguration indistinguishable from a typo.
+func PlatformOnly(db platformExecer, logger *slog.Logger) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFromContext(r.Context())
+			if !ok {
+				// Authenticate must run before PlatformOnly on every route
+				// that uses it. Reaching here without a principal is a
+				// wiring defect, not a caller error — the same reading
+				// TenantMatch takes.
+				WriteError(w, CodeInternal, "platform gate ran before authentication")
+				return
+			}
+
+			if principal.Plane != auth.PlanePlatform {
+				reqID := RequestIDFromContext(r.Context())
+				if err := audit.WritePlatformDeny(r.Context(), db, audit.DenyEvent{
+					ActorPrincipalID: principal.ID,
+					Action:           "request.plane_mismatch",
+					ObjectType:       "platform",
+					Severity:         "INFO",
+					Reason:           "tenant_credential_on_platform_route",
+					RequestID:        reqID,
+				}); err != nil {
+					logger.ErrorContext(r.Context(), "platform audit write failed",
+						"error", err, "request_id", reqID)
+				}
+				WriteError(w, CodeForbidden, "this credential is not a platform credential")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // TenantMatch enforces ADR-105: the tenant named in the path must equal
 // the tenant the token named. It is applied per-route, wrapping the
 // specific handler after ServeMux has matched {tenant} — a middleware
@@ -250,6 +310,22 @@ func TenantMatch(runner tenantTxRunner, logger *slog.Logger) Middleware {
 				// that uses it. Reaching here without a principal is a
 				// wiring defect, not a caller error.
 				WriteError(w, CodeInternal, "tenant match ran before authentication")
+				return
+			}
+
+			// ADR-111, stated explicitly rather than left to arithmetic.
+			// A platform credential names no tenant, so the comparison
+			// below already refused it — but only because "" never equals
+			// a real path segment. That is a coincidence of empty strings
+			// doing the work of a security boundary. Naming the plane
+			// makes the refusal survive someone later deciding a platform
+			// credential should carry a tenant for convenience.
+			if principal.Plane != auth.PlaneTenant {
+				reqID := RequestIDFromContext(r.Context())
+				logger.WarnContext(r.Context(), "platform credential on a tenant route",
+					"principal_id", principal.ID, "path_tenant", pathTenant,
+					"request_id", reqID)
+				WriteError(w, CodeForbidden, "this credential is not a tenant credential")
 				return
 			}
 

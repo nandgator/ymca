@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/nandgator/ymca/backend/internal/auth"
 )
 
 // fixedHeader is D3's only accepted header, byte for byte — minting it any
@@ -35,13 +37,47 @@ func Mint(secret []byte, sub, tenant string, iat, exp time.Time) (string, error)
 		return "", fmt.Errorf("dev: mint: encode claims: %w", err)
 	}
 
+	return sign(secret, payload), nil
+}
+
+// MintPlatform signs a platform-plane dev token for sub (ADR-111). It names
+// no tenant, because the platform plane names none.
+//
+// This is a separate function rather than a plane argument to Mint, and that
+// is deliberate. Mint still refuses an empty tenant, so no existing caller
+// can produce a platform credential by leaving an argument blank or by
+// passing a variable that happened to be empty. Minting platform authority
+// requires naming this function — the same reasoning as the tag polarity in
+// ADR-106 and the zero value in ADR-111: the dangerous thing is never what
+// you get by accident.
+func MintPlatform(secret []byte, sub string, iat, exp time.Time) (string, error) {
+	if sub == "" {
+		return "", fmt.Errorf("dev: mint platform: sub is required")
+	}
+	if len(secret) < minSecretBytes {
+		return "", fmt.Errorf("dev: mint platform: secret must be at least %d bytes", minSecretBytes)
+	}
+
+	payload, err := json.Marshal(claims{
+		Sub:   sub,
+		Plane: string(auth.PlanePlatform),
+		IAT:   iat.Unix(),
+		EXP:   exp.Unix(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("dev: mint platform: encode claims: %w", err)
+	}
+	return sign(secret, payload), nil
+}
+
+// sign is the half of minting that both Mint and MintPlatform share: the
+// fixed header, the payload, and the HMAC over them.
+func sign(secret []byte, payload []byte) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(fixedHeader))
 	p := base64.RawURLEncoding.EncodeToString(payload)
 	signingInput := h + "." + p
 
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(signingInput))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-
-	return signingInput + "." + sig, nil
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
