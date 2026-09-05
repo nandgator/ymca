@@ -1,6 +1,15 @@
-// Package authz implements 6.1's three-step authorization check — tenant
-// ancestry, the OpenFGA graph, and PostgreSQL validity (8.1) — and audits
-// every DENY inside the tenant transaction that produced it (D8).
+// Package authz implements 6.1's four-step authorization check — tenant
+// ancestry, the effective role assignments, the OpenFGA graph, and what
+// remains of PostgreSQL validity (8.1) — and audits every DENY inside the
+// tenant transaction that produced it (D8).
+//
+// The ordering is load-bearing (ADR-109). Steps 2 and 3 are not
+// interchangeable: role assignments are resolved BEFORE the graph is asked,
+// and supplied to it as contextual tuples, because Check returns a boolean
+// rather than a path. Reversing them reintroduces the defect that made 8.2's
+// term-window and clearance limbs unwritable — a validity step running after
+// the graph cannot tell whether an ALLOW came through the lapsed role or the
+// direct grant beside it.
 package authz
 
 import (
@@ -38,7 +47,10 @@ type Request struct {
 	RequestTenantID string
 	Object          Object
 	// Relation is the OpenFGA relation checked on Object — e.g. "admin",
-	// "may_use". 8.1 calls "<object type>.<relation>" the permission name.
+	// "may_use". 8.1 calls "<object type>.<relation>" the permission name,
+	// and Permission() below is that name: step 2 matches role_permission
+	// rows against it, so Object.Type and Relation together decide which
+	// assignments can possibly apply.
 	Relation string
 	// Action and RequestID are audit context for a DENY (8.5, D9).
 	Action    string
@@ -60,7 +72,12 @@ var ErrTenantMismatch = errors.New("authz: object's tenant does not match the re
 // so, which this shape does not yet provide.
 const severityDeny = "INFO"
 
-// Check runs all three steps of 6.1 and audits every DENY inside the same
+// Permission is 8.1's permission name for this request,
+// "<object type>.<relation>" — the form role_permission stores and
+// restriction_kind_permission maps.
+func (r Request) Permission() string { return r.Object.Type + "." + r.Relation }
+
+// Check runs all four steps of 6.1 and audits every DENY inside the same
 // tenant transaction that produced it (D8).
 func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, error) {
 	// Step 1 — tenant ancestry. Rejected before any graph query (ADR-018),
@@ -82,8 +99,19 @@ func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, e
 		user := "principal:" + req.Principal.ID
 		object := req.Object.Type + ":" + req.Object.ID
 
-		// Step 2 — the OpenFGA graph, against the pinned model id (fga.go).
-		ok, err := fga.Check(ctx, user, req.Relation, object)
+		// Step 2 — the effective role assignments for this permission
+		// (roles.go). Everything temporal is inside that query. An empty
+		// result is not a denial: the principal may still reach the
+		// permission directly, or through entitlement, and the graph is
+		// what decides.
+		contextual, err := roleTuples(ctx, tx, req.Principal.ID, req.Permission())
+		if err != nil {
+			return err
+		}
+
+		// Step 3 — the OpenFGA graph, against the pinned model id (fga.go),
+		// given step 2's tuples and no others.
+		ok, err := fga.Check(ctx, user, req.Relation, object, contextual)
 		if err != nil {
 			return fmt.Errorf("authz: graph step: %w", err)
 		}
@@ -91,9 +119,9 @@ func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, e
 			return writeDeny(ctx, tx, req, "graph")
 		}
 
-		// Step 3 — PostgreSQL validity (validity.go). Each limb is named
-		// there; three of the four are documented gaps, not silent ones.
-		result, err := checkValidity(ctx, tx, req.Principal.ID)
+		// Step 4 — what remains (validity.go): principal and person status,
+		// and any restriction withholding this specific permission.
+		result, err := checkValidity(ctx, tx, req.Principal.ID, req.Permission())
 		if err != nil {
 			return fmt.Errorf("authz: validity step: %w", err)
 		}

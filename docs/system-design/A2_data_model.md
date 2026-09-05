@@ -75,10 +75,15 @@ NO POLICY, because the table carries no tenant_id
     policed. Reading them still requires having reached the parent.
 
 PLATFORM-DEFINED, no tenant_id by design
+    grantable_permission — the ADR-110 set; permissions are
+    system-defined and immutable (ADR-076)
     restriction_kind_permission — the meaning of a restriction kind
     cannot vary by tenant, because a restriction may be platform-wide
-    (05.9.9). Readable by every tenant connection; writable by the
-    platform plane only.
+    (05.9.9)
+
+    Both are readable by every tenant connection and writable by
+    neither: INSERT, UPDATE and DELETE are revoked from the
+    application role in migration 0002.
 ```
 
 Three tables — `verification`, `clearance`, `audit_event` — have a **nullable**
@@ -553,11 +558,21 @@ CREATE TABLE role_definition (
 );
 -- Cloned from a template, never linked to one. ADR-079
 
--- The bundle. `permission` is '<object_type>.<relation>' and must name a
--- relation whose type restriction includes role_assignment#holder. ADR-110
+-- The grantable set of ADR-110, as a table so that a foreign key can point
+-- at it. A1.2 remains authoritative: a permission belongs here exactly when
+-- `role_assignment#holder` is in its type restriction, and a test fails if
+-- the two sets ever differ (A1.8 rule 10). Platform-defined — permissions
+-- are system-defined and immutable (ADR-076) — so no tenant_id.
+CREATE TABLE grantable_permission (
+    permission text PRIMARY KEY
+);
+
+-- The bundle. The foreign key IS ADR-110: a role cannot be given a
+-- permission the model would refuse to resolve for it. Declarative rather
+-- than a trigger, so a bulk load cannot slip past it.
 CREATE TABLE role_permission (
     role_definition_id uuid NOT NULL REFERENCES role_definition,
-    permission         text NOT NULL,
+    permission         text NOT NULL REFERENCES grantable_permission,
     PRIMARY KEY (role_definition_id, permission)
 );
 
@@ -978,30 +993,30 @@ CREATE TABLE audit_event (
 
 ## A2.11 Where the invariants live
 
-| Invariant                                               | Enforced by                                                   |
-| ------------------------------------------------------- | ------------------------------------------------------------- |
-| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                          |
-| One active membership per tenant                        | partial unique index                                          |
-| One elevated principal per person                       | partial unique index                                          |
-| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                    |
-| One authority verb per pair                             | unique constraint                                             |
-| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                               |
-| Guardian ≠ minor                                        | `CHECK`                                                       |
-| Affiliation not self-referential                        | `CHECK`                                                       |
-| Tenant isolation                                        | RLS, four documented exemptions                               |
-| No cycles in the DAG                                    | recursive CTE, pre-commit                                     |
-| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`              |
-| One live consumption record per person per type per day | partial unique index                                          |
-| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                             |
-| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103                |
-| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                           |
-| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108    |
-| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises                 |
-| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role               |
-| An ACTING assignment names its substantive one          | `CHECK (holding_type = 'ACTING') = (substantive IS NOT NULL)` |
-| A MANDATORY_TERM assignment has an end date             | trigger; the policy lives on `role_definition`. ADR-069       |
-| A role confers only role-grantable permissions          | trigger on `role_permission` against A1.2's set. ADR-110      |
-| An expired term cannot authorize                        | never supplied to the graph. ADR-109, not a constraint        |
+| Invariant                                               | Enforced by                                                        |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                               |
+| One active membership per tenant                        | partial unique index                                               |
+| One elevated principal per person                       | partial unique index                                               |
+| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                         |
+| One authority verb per pair                             | unique constraint                                                  |
+| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                                    |
+| Guardian ≠ minor                                        | `CHECK`                                                            |
+| Affiliation not self-referential                        | `CHECK`                                                            |
+| Tenant isolation                                        | RLS, four documented exemptions                                    |
+| No cycles in the DAG                                    | recursive CTE, pre-commit                                          |
+| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`                   |
+| One live consumption record per person per type per day | partial unique index                                               |
+| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                                  |
+| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103                     |
+| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                                |
+| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108         |
+| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises                      |
+| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role                    |
+| An ACTING assignment names its substantive one          | `CHECK (holding_type = 'ACTING') = (substantive IS NOT NULL)`      |
+| A MANDATORY_TERM assignment has an end date             | trigger; the policy lives on `role_definition`. ADR-069            |
+| A role confers only role-grantable permissions          | `role_permission.permission` FK to `grantable_permission`. ADR-110 |
+| An expired term cannot authorize                        | never supplied to the graph. ADR-109, not a constraint             |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not

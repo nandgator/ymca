@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/openfga/go-sdk/client"
 
 	"github.com/nandgator/ymca/backend/internal/auth"
@@ -24,7 +25,7 @@ import (
 )
 
 // TestGetMe_EndToEnd exercises D6's whole path with a minted token: a real
-// dev JWT, real HS256 verification, a real principal lookup, and two real
+// dev JWT, real HS256 verification, a real principal lookup, and five real
 // authz.Check calls against the live OpenFGA and PostgreSQL — the same
 // wiring main.go's serve() builds, reassembled here around an
 // httptest.Server instead of a real listener. Requires the same
@@ -56,6 +57,8 @@ func TestGetMe_EndToEnd(t *testing.T) {
 		personID    = "77777777-7777-7777-7777-777777777777"
 		principalID = "88888888-8888-8888-8888-888888888888"
 		idpSubject  = "me-integration-test-subject"
+		roleDefID   = "99999999-9999-9999-9999-999999999991"
+		assignID    = "99999999-9999-9999-9999-999999999992"
 	)
 
 	if _, err := pool.Pool().Exec(ctx, `
@@ -76,8 +79,44 @@ func TestGetMe_EndToEnd(t *testing.T) {
 	`, principalID, personID, idpSubject); err != nil {
 		t.Fatalf("seed principal: %v", err)
 	}
+
+	// A role conferring may_approve_membership, held within its term. This is
+	// the end-to-end claim 8.4 rests on: the client gates its shell on /me,
+	// and a permission held through a role must be indistinguishable there
+	// from one held directly. No tuple is written for it — step 2 resolves it
+	// per check (ADR-109).
+	if err := pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO role_definition (id, tenant_id, code, name, term_policy, status)
+			VALUES ($1, $2, 'me-test-approver', 'Me Test Approver', 'OPTIONAL_TERM', 'ACTIVE')
+			ON CONFLICT (id) DO NOTHING`, roleDefID, tenantID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO role_permission (role_definition_id, permission)
+			VALUES ($1, 'tenant.may_approve_membership') ON CONFLICT DO NOTHING`,
+			roleDefID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO role_assignment
+			  (id, tenant_id, role_definition_id, subject_principal_id,
+			   scope_type, scope_id, valid_until, granted_by_principal_id)
+			VALUES ($1, $2, $3, $4, 'tenant', $2, now() + interval '1 day', $4)
+			ON CONFLICT (id) DO NOTHING`, assignID, tenantID, roleDefID, principalID)
+		return err
+	}); err != nil {
+		t.Fatalf("seed role: %v", err)
+	}
+
 	t.Cleanup(func() {
 		bg := context.Background()
+		_ = pool.InTenantTx(bg, tenantID, func(tx pgx.Tx) error {
+			_, _ = tx.Exec(bg, `DELETE FROM role_assignment WHERE id = $1`, assignID)
+			_, _ = tx.Exec(bg, `DELETE FROM role_permission WHERE role_definition_id = $1`, roleDefID)
+			_, _ = tx.Exec(bg, `DELETE FROM role_definition WHERE id = $1`, roleDefID)
+			return nil
+		})
 		_, _ = pool.Pool().Exec(bg, `DELETE FROM principal WHERE id = $1`, principalID)
 		_, _ = pool.Pool().Exec(bg, `DELETE FROM person WHERE id = $1`, personID)
 		_, _ = pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1`, tenantID)
@@ -160,7 +199,14 @@ func TestGetMe_EndToEnd(t *testing.T) {
 	if got.PrincipalID != principalID || got.PersonID != personID || got.TenantID != tenantID || got.Kind != "PERSONAL" {
 		t.Fatalf("response = %+v, unexpected identity fields", got)
 	}
-	wantPerms := map[string]bool{"tenant:member": true, "tenant:finance_reader": true}
+	// member and finance_reader are held by direct tuple;
+	// may_approve_membership only through the role assignment seeded above.
+	// admin and safeguarding_reader are held by neither route.
+	wantPerms := map[string]bool{
+		"tenant:member":                 true,
+		"tenant:finance_reader":         true,
+		"tenant:may_approve_membership": true,
+	}
 	if len(got.Permissions) != len(wantPerms) {
 		t.Fatalf("permissions = %v, want exactly %v", got.Permissions, wantPerms)
 	}

@@ -673,6 +673,9 @@ rejected regardless of what else it enables.
    `role_assignment#holder` is in its type restriction here. The
    suite proves the complement: every relation in its `forbidden`
    block must be REFUSED by the model, not merely denied. ADR-110.
+10 Migration 0002 seeds that same set into `grantable_permission`,
+   so a foreign key can enforce it. A test fails if the two sets
+   differ in either direction. ADR-110, A2.7.
 ```
 
 Rule 5 is the enforcement point for ADR-018. A type with no tenant path is
@@ -683,6 +686,14 @@ what keeps ADR-070 true: a stored role tuple outlives the term that justified
 it, and removing it then needs a sweeper — the exact dependency the design
 refuses. Rule 9 is what keeps ADR-078 true: the grantable set is a real
 security boundary, and a boundary that lives in a comment is not one.
+
+**Rule 10 exists because the set is now stated twice** — once here as a type
+restriction, once in migration 0002 as seed data a foreign key points at. Two
+statements of one set drift, and this pair drifts silently in the dangerous
+direction: a permission seeded but not modelled becomes grantable in
+PostgreSQL and unresolvable in OpenFGA, so a role confers something that
+never works and nothing raises. The test reads both artifacts on a checkout,
+before either has been applied anywhere.
 
 **Rule 9's negative form is deliberate.** Asserting that a forbidden role
 tuple produces a DENY would be weaker than it looks: a DENY means the tuple

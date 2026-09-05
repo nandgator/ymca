@@ -206,10 +206,18 @@ Present in the design, absent from the API until something needs them.
 }
 ```
 
-`permissions` is exactly four candidates, each a full 6.1 check against the
+`permissions` is exactly five candidates, each a full 6.1 check against the
 tenant object named in the path: `tenant:admin`, `tenant:member`,
-`tenant:finance_reader`, `tenant:safeguarding_reader`. Four checks, fixed,
-whatever the tenant contains; only the ones that pass are listed.
+`tenant:finance_reader`, `tenant:safeguarding_reader` and
+`tenant:may_approve_membership`. Five checks, fixed, whatever the tenant
+contains; only the ones that pass are listed.
+
+`may_approve_membership` joined the set with ADR-110. It is tenant-scoped and
+role-grantable, and 8.3's admission endpoint is the first thing the client
+must show or hide on it — which is exactly what this endpoint is for. Three of
+the five now resolve through a role as readily as through a direct grant, and
+the response says nothing about which: the client is told what it may do, not
+how it came to be allowed.
 
 A permission on any other object — `consumption_type:may_record`, an invoice,
 a unit — is reported by the endpoint that returns that object, at most one

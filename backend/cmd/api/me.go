@@ -12,13 +12,21 @@ import (
 	"github.com/nandgator/ymca/backend/internal/httpx"
 )
 
-// tenantPermissions is D6's candidate set: exactly four, each a full
+// tenantPermissions is D6's candidate set (A3.9): exactly five, each a full
 // authz.Check against the tenant object named in the path. Only the ones
 // that pass are reported. This is not a general-purpose scan of every
 // relation the tenant type declares — 05.1's FGA model separately grants
 // jit_grantee and administered_by, which are deliberately not tenant-plane
 // permissions and so are not asked about here.
-var tenantPermissions = []string{"admin", "member", "finance_reader", "safeguarding_reader"}
+//
+// Three of the five — finance_reader, safeguarding_reader and
+// may_approve_membership — are role-grantable (ADR-110), so each check may
+// now resolve through step 2's contextual tuples rather than a direct grant.
+// Nothing here changes for that: the caller is told what it may do, never how
+// it came to be allowed.
+var tenantPermissions = []string{
+	"admin", "member", "finance_reader", "safeguarding_reader", "may_approve_membership",
+}
 
 type meResponse struct {
 	PrincipalID string   `json:"principal_id"`

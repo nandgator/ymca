@@ -12,18 +12,22 @@ where a file here records a deviation explicitly.
 
 ```txt
 migrations/0001_init.sql   the full A2 schema, 54 tables, RLS on 34
+migrations/0002_roles.sql  A2.7 roles, A2.8 restriction mapping, RLS on 2
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)
 fga/assertions.yaml        A1.6 fixture + A1.7 assertions, executable
 fga/embed.go               go:embed and the assertion parser
+fga/sync_test.go           A1.8 rules 7-9, machine-checked
+fga/grantable_test.go      A1.8 rule 10 — the model vs migration 0002
 cmd/fga/                   applies the model, runs the assertions
 cmd/api/                   the HTTP server, and GET /me
 internal/config/           environment configuration
 internal/db/               the pool, and the tenant transaction (8.2)
 internal/auth/             the ADR-106 port and its provider registry
 internal/auth/dev/         the development provider — //go:build dev only
-internal/authz/            6.1's three-step check, and the OpenFGA client
+internal/authz/            6.1's four-step check, and the OpenFGA client
+internal/authz/roles.go    step 2 — effective assignments, per check
 internal/audit/            8.5's DENY record
 internal/httpx/            the middleware chain, A3.4's errors
 ```
@@ -150,6 +154,30 @@ isolates, that an unset `app.tenant_id` raises, that a real OpenFGA tuple
 produces ALLOW and its absence produces an audited DENY, and that `GET /me`
 returns exactly the permissions the graph grants.
 
+They also now prove the claim ADR-109 exists to make. `TestRoleAssignment_
+AgainstRealStore` holds a role assignment fixed in OpenFGA — there is nothing
+there to hold — and changes only a column in PostgreSQL:
+
+```txt
+a current assignment ALLOWs
+an EXPIRED assignment DENIES        no sweeper ran; a column changed
+an assignment not yet begun DENIES
+a revoked assignment DENIES
+a missing required clearance DENIES ADR-087
+NO_ROLE_ASSIGNMENT suppresses it    05.9.4, applied in step 2
+no role tuple was ever stored       the same check WITHOUT contextual
+                                    tuples must DENY
+```
+
+The last one is the load-bearing one. If any role tuple had reached the
+store, the check without contextual tuples would pass, and the expiry
+guarantee above would be resting on a sweeper nobody has written.
+
+**Every one of these was drift-tested**, per the handoff's standing rule:
+deleting the term-window clause fails exactly the expired and not-yet-begun
+cases, deleting the clearance clause fails exactly the clearance case, and
+expiring `/me`'s role assignment drops the permission from the response.
+
 ---
 
 ## Roles
@@ -230,13 +258,26 @@ What remains is formatting, and it is checked rather than promised:
 
 ### The drift guard
 
-`go test ./fga/` implements A1.8 rule 7:
+`go test ./fga/` implements A1.8 rules 7 to 10:
 
 ```txt
 TestModelMatchesA1_2       model.fga must equal the A1.2 fence, byte for byte
 TestAssertionsCoverA1_7    every assertion A1.7 promises must actually run,
                            with the expectation A1.7 gives it
+TestForbiddenCoversA1_7Refuse
+                           every relation A1.7 says must be REFUSED is
+                           actually probed by the suite
+TestGrantableSetMatchesMigration
+                           A1.2's role_assignment#holder set and migration
+                           0002's grantable_permission seed must agree, in
+                           both directions
 ```
+
+`go run ./cmd/fga test` adds two runtime guards the parser cannot give:
+`LoadAssertions` refuses to write a role tuple to the store at all, and every
+tuple in the `forbidden` block must be **rejected** by OpenFGA rather than
+merely denied — a DENY means the tuple was accepted and one edit away from
+resolving.
 
 Both were checked against real drift, not just observed to pass: editing
 `model.fga`, deleting an assertion, and flipping an expectation each produce a
@@ -261,9 +302,11 @@ Recorded in `A2.1` and `11.2`, not worked around here:
   Until it exists the DAG is a graph.
 - **`audit_event` is not partitioned.** A2.10 marks it monthly on
   `occurred_at`; C3 records that there are no scale figures to size it against.
-- **Two of 6.1's step-3 limbs check nothing.** A2 defines no role assignment
-  at all, so the term window and clearance have nothing to query, and
-  `restriction.kind` maps to no permission. `internal/authz/validity.go`
-  keeps each limb as a named function that returns valid, so the gap is
-  visible in the code rather than silently absent — an expired term still
-  authorizes today.
+- **No office or committee appointment workflow.** `office_conferred_role`
+  exists and `role_assignment.via_office_holding_id` is there for it, but
+  nothing yet materializes assignments when someone is appointed, or ends
+  them when an office is vacated (05.6.4). Committees have no conferral
+  table at all, though 05.6.7 routes approval through them.
+- **No reverse role query.** "Who holds this permission at this scope" is a
+  PostgreSQL query nobody has written. 05.6.7's approval routing needs it;
+  ADR-104 and 8.11 mean it must never become a graph query.
