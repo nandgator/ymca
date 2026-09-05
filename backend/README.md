@@ -43,8 +43,13 @@ internal/httpx/            the middleware chain, A3.4's errors
 ```txt
 compose.yaml     not needed — postgres and openfga already run under podman
 Dockerfile       not needed until there is something to deploy
-internal/organization  identity  membership  consumption  finance
+internal/organization  identity  finance      the rest of 8.3
 ```
+
+`membership/` and `consumption/` now exist and hold what 8.3's configuration
+endpoints needed — bundles, plans, consumption types. Admission, consumption
+records and the finance endpoints are still unwritten; see the handoff §8 for
+the order and what to read first.
 
 ---
 
