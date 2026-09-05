@@ -41,32 +41,42 @@ mediated by verified contact points so existence is not disclosed.
 
 ## 11.2 Known gaps
 
-| Gap                             | Impact                                                                                               | Where   |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------- | ------- |
-| Instructor double-booking       | Allocation protects resources, not people                                                            | 05.4.12 |
-| Deposit forfeiture rules        | Settlement exists; criteria unspecified                                                              | 05.8.13 |
-| Renewal workflow                | Referenced throughout; not designed                                                                  | 05.3.12 |
-| Recurring schedule generation   | Occurrences modelled individually                                                                    | 05.4.12 |
-| Recurring bookings              | A weekly slot is N independent bookings                                                              | 05.5.11 |
-| Temporal policy resolution      | "What was the policy on a past date"                                                                 | 05.7.11 |
-| Policy simulation               | No blast-radius view for policy changes                                                              | 05.7.11 |
-| Succession                      | Terms expire; no successor workflow                                                                  | 05.6.12 |
-| Duplicate detection heuristic   | Must not leak existence                                                                              | 05.2.12 |
-| Guardianship disputes           | Conflicting guardian instructions                                                                    | 05.2.12 |
-| Multi-currency tenants          | One currency per invoice; untested across                                                            | 05.8.13 |
-| Accounting export               | No ledger integration                                                                                | 03.3    |
-| Appeal against restriction      | Likely out-of-platform                                                                               | 05.9.11 |
-| Upward member data              | Whether national bodies hold rosters is unestablished                                                | 05.1.11 |
-| Cycle check unimplemented       | `authorization_edge` accepts a cycle; the DAG is a graph until the pre-commit recursive CTE exists   | A2.2    |
-| Twelve tables without RLS       | No `tenant_id` column, so no policy. `charge` means an invoice id reaches its contents               | A2.1    |
-| Global rows invisible           | Nullable `tenant_id` on `verification`, `clearance`, `audit_event` never matches a tenant connection | A2.1    |
-| Plan lifecycle unbuilt          | A3.7 creates and lists plans; supersession, retirement and CLOSED_TO_NEW are unreachable (05.3.2)    | A3.7    |
-| Membership numbers unvalidated  | Caller-supplied and unique per tenant; no format rule, so two conventions can coexist in one tenant  | A3.7    |
-| Nothing sweeps idempotency keys | `idempotency_key` grows without bound; the index for a sweep exists, the sweep does not              | A2.10   |
-| Office appointment workflow     | `office_conferred_role` exists; materializing assignments on appointment is unwritten (05.6.4)       | A2.7    |
-| Committee-conferred roles       | 05.6.7 routes approval through committee membership; only offices have a conferral table             | A2.7    |
-| Role template catalogue         | ADR-079 says templates are cloned; no template source exists to clone from                           | 05.6.12 |
-| No reverse role query           | "who holds this permission here" is a PostgreSQL query nobody has written (05.6.7 step 2)            | ADR-109 |
+| Gap                                                  | Impact                                                                                                                                                                         | Where          |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
+| Instructor double-booking                            | Allocation protects resources, not people                                                                                                                                      | 05.4.12        |
+| Deposit forfeiture rules                             | Settlement exists; criteria unspecified                                                                                                                                        | 05.8.13        |
+| Renewal workflow                                     | Referenced throughout; not designed                                                                                                                                            | 05.3.12        |
+| Recurring schedule generation                        | Occurrences modelled individually                                                                                                                                              | 05.4.12        |
+| Recurring bookings                                   | A weekly slot is N independent bookings                                                                                                                                        | 05.5.11        |
+| Temporal policy resolution                           | "What was the policy on a past date"                                                                                                                                           | 05.7.11        |
+| Policy simulation                                    | No blast-radius view for policy changes                                                                                                                                        | 05.7.11        |
+| Succession                                           | Terms expire; no successor workflow                                                                                                                                            | 05.6.12        |
+| Duplicate detection heuristic                        | Must not leak existence                                                                                                                                                        | 05.2.12        |
+| Guardianship disputes                                | Conflicting guardian instructions                                                                                                                                              | 05.2.12        |
+| Multi-currency tenants                               | One currency per invoice; untested across                                                                                                                                      | 05.8.13        |
+| Accounting export                                    | No ledger integration                                                                                                                                                          | 03.3           |
+| Appeal against restriction                           | Likely out-of-platform                                                                                                                                                         | 05.9.11        |
+| Upward member data                                   | Whether national bodies hold rosters is unestablished                                                                                                                          | 05.1.11        |
+| Twelve tables without RLS                            | No `tenant_id` column, so no policy. `charge` means an invoice id reaches its contents                                                                                         | A2.1           |
+| Global rows invisible                                | Nullable `tenant_id` on `verification`, `clearance` never matches a tenant connection                                                                                          | A2.1           |
+| Plan lifecycle unbuilt                               | A3.7 creates and lists plans; supersession, retirement and CLOSED_TO_NEW are unreachable (05.3.2)                                                                              | A3.7           |
+| Membership numbers unvalidated                       | Caller-supplied and unique per tenant; no format rule, so two conventions can coexist in one tenant                                                                            | A3.7           |
+| Nothing sweeps idempotency keys                      | `idempotency_key` grows without bound; the index for a sweep exists, the sweep does not                                                                                        | A2.10          |
+| Office appointment workflow                          | `office_conferred_role` exists; materializing assignments on appointment is unwritten (05.6.4)                                                                                 | A2.7           |
+| Committee-conferred roles                            | 05.6.7 routes approval through committee membership; only offices have a conferral table                                                                                       | A2.7           |
+| Role template catalogue                              | ADR-079 says templates are cloned; no template source exists to clone from                                                                                                     | 05.6.12        |
+| No reverse role query                                | "who holds this permission here" is a PostgreSQL query nobody has written (05.6.7 step 2)                                                                                      | ADR-109        |
+| Platform-plane POSTs outside idempotency             | `idempotency_key.tenant_id` is `NOT NULL`; a retried `POST /platform/tenants` creates a second tenant. Accepted, not fixed — A3.6's own scope is money and consumption records | A3.6, ADR-113  |
+| `platform_audit_event` unread                        | Written by nothing yet either — `may_read_platform_audit` now has a referent (ADR-112) but still no endpoint reads it. C2, still open                                          | A2.10, ADR-112 |
+| Association-level membership invisible to unit lists | `membership.org_unit_id IS NULL` appears under no unit's member list — the deliberate under-report ADR-104 requires, not an oversight                                          | A2.4, A3.7     |
+
+**Closed this round:** the "cycle check unimplemented" gap — `authorization_edge`
+accepted a cycle because nothing enforced A2.2's pre-commit recursive CTE, and
+now something does: `POST /t/{t}/units` (A3.7) is specified to run it before
+committing an edge. The closure is conditional on that code and its migration
+actually landing — this round wrote the record, not the CTE — so treat the
+row as closed only once the next agent's implementation is in and tested,
+not from this document alone.
 
 ## 11.3 Unresolved tensions
 

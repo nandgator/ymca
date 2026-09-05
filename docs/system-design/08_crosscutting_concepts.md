@@ -272,12 +272,21 @@ connection at all. Those failures go to the structured log, correlated by the
 same request id (A3.4). A tenant mismatch is the opposite case and _is_
 audited: it has an authenticated principal and a tenant the caller named.
 
+**Platform-plane audit is a separate table**, for the reason above stated
+generally rather than as an exception: `audit_event` has no row that could
+satisfy the isolation policy with no tenant, so a platform-plane decision
+cannot be recorded there at all — proved against the live cluster, not
+assumed. `platform_audit_event` (A2.10) carries no `tenant_id` column and
+isolates by privilege rather than by policy: the application may `INSERT`
+into it and cannot read it back. ADR-112.
+
 ### Record shape
 
 ```txt
 AuditEvent
     id
-    tenant_id             nullable for platform-plane events
+    tenant_id             NOT NULL — see above; platform-plane events
+                          go to PlatformAuditEvent instead
     actor_principal_id
     delegated_identity_id nullable — impersonation (ADR-068)
     action
@@ -285,6 +294,16 @@ AuditEvent
     outcome               ALLOWED | DENIED | ERROR
     severity              INFO | NOTABLE | HIGH
     context               request id, source, JIT grant reference
+    occurred_at
+
+PlatformAuditEvent
+    id
+    actor_principal_id
+    action
+    object_type, object_id
+    outcome               ALLOWED | DENIED | ERROR
+    severity              INFO | NOTABLE | HIGH
+    context
     occurred_at
 ```
 

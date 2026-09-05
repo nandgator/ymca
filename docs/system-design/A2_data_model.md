@@ -84,12 +84,38 @@ PLATFORM-DEFINED, no tenant_id by design
     Both are readable by every tenant connection and writable by
     neither: INSERT, UPDATE and DELETE are revoked from the
     application role in migration 0002.
+
+NO tenant_id BY CONSTRUCTION, readable by nobody the application can be
+    platform_audit_event — there is no tenant, so no column names one
+    and no policy could ever be written for it. Isolation is not RLS
+    here; it is the grant. `ymca_app` holds INSERT only —
+    `REVOKE ALL ... FROM ymca_app; GRANT INSERT ... TO ymca_app` — so
+    the application writes this table and cannot read back what it
+    wrote. ADR-112
 ```
 
-Three tables — `verification`, `clearance`, `audit_event` — have a **nullable**
-`tenant_id` for deliberately global rows. Under the policy above `NULL = <uuid>`
-is NULL, so those global rows are invisible to every tenant connection. Reading
-them needs a path this schema does not provide. Known gap, 11.2.
+This is a fourth bucket, distinct from the two above it: unlike "no policy,
+because the table carries no tenant_id", there is no parent row here to reach
+a tenant through, ever — the row is platform-plane by construction, not by an
+accident of schema shape. And unlike the platform-defined pair, this table
+is not readable by every tenant connection; it is not readable by the
+application at all.
+
+Two tables — `verification` and `clearance` — have a **nullable** `tenant_id`
+for deliberately global rows. Under the policy above `NULL = <uuid>` is NULL,
+so those global rows are invisible to every tenant connection. Reading them
+needs a path this schema does not provide. Known gap, 11.2.
+
+`audit_event.tenant_id` is **not** among them, and its own comment used to say
+otherwise. The comment was wrong from the day it was written: `audit_event`
+carries `FORCE ROW LEVEL SECURITY` with `USING (tenant_id =
+current_setting('app.tenant_id')::uuid)`, and a `NULL` there makes that
+condition unknown, which `WITH CHECK` treats as a failure — inserting a
+platform-plane row as `ymca_api` raises `new row violates row-level security
+policy for table "audit_event"` rather than being silently accepted. There was
+never a working path for a null-tenant audit row; ADR-112 gives the
+platform-plane case a table of its own instead. `audit_event.tenant_id`
+becomes `NOT NULL` — with no foreign key, for the reason A2.10 records.
 
 Required extensions:
 
@@ -303,6 +329,7 @@ CREATE TABLE membership (
     tenant_id             uuid NOT NULL REFERENCES tenant,
     person_id             uuid NOT NULL REFERENCES person,
     plan_id               uuid NOT NULL REFERENCES membership_plan,
+    org_unit_id           uuid REFERENCES organizational_unit,  -- nullable
     number                text NOT NULL,
     state                 text NOT NULL,
     admitted_at           timestamptz,
@@ -312,6 +339,13 @@ CREATE TABLE membership (
     conferred_by_record_id uuid REFERENCES decision_record,
     UNIQUE (tenant_id, number)
 );
+-- org_unit_id is nullable, matching resource.org_unit_id and
+-- office.org_unit_id (A2.5, A2.7), both already nullable. NULL means an
+-- association-level membership: it belongs to no unit and therefore
+-- appears under no unit's member list (ADR-104's under-report, never
+-- over-report). NOT NULL was rejected: it would force every tenant to
+-- own a unit before admitting anyone, pushing a root-unit into tenant
+-- provisioning, and 05.3 nowhere requires a membership to sit in a unit.
 CREATE UNIQUE INDEX one_active_membership_per_tenant
   ON membership (tenant_id, person_id) WHERE state = 'ACTIVE';
 
@@ -1003,7 +1037,7 @@ CREATE TABLE idempotency_key (
 
 CREATE TABLE audit_event (
     id                    bigserial PRIMARY KEY,
-    tenant_id             uuid,      -- null for platform-plane
+    tenant_id             uuid NOT NULL,   -- NOT NULL, but no FK; see below
     actor_principal_id    uuid,
     delegated_identity_id uuid,      -- impersonation. ADR-068
     action                text NOT NULL,
@@ -1017,6 +1051,51 @@ CREATE TABLE audit_event (
 -- Append-only. No UPDATE, no DELETE. Outlives SCRUBBED persons,
 -- which is why it holds identifiers rather than names.
 -- Partitioned monthly on occurred_at.
+--
+-- tenant_id is NOT NULL, not nullable "for platform-plane" as an earlier
+-- draft of this comment claimed. That claim was never true: FORCE ROW
+-- LEVEL SECURITY's USING clause makes a NULL tenant_id an unknown, which
+-- WITH CHECK treats as a failed insert, not an accepted one — proved
+-- against the live cluster, not assumed. The platform plane has its own
+-- table below. ADR-112
+--
+-- NOT NULL, and deliberately NO foreign key to tenant. The tenant-mismatch
+-- DENY of ADR-105 records the tenant the caller NAMED, and a caller
+-- probing for tenants they cannot reach names one that does not exist. A
+-- foreign key would refuse precisely the row that evidences the probe, and
+-- httpx.TenantMatch only logs a failed audit write — so the most
+-- security-relevant DENY in the system would disappear silently. This is
+-- the same reason the columns below hold bare identifiers: the record
+-- outlives what it names.
+
+-- Platform-plane audit. No tenant_id column, and none is possible: there
+-- is no tenant to name for a platform-lifecycle decision. Isolation is
+-- not a policy here — there is nothing to isolate BY — it is the grant:
+-- REVOKE ALL ... FROM ymca_app; GRANT INSERT ... TO ymca_app. The
+-- application can write this table and cannot read back what it wrote.
+--
+-- A second RLS policy on audit_event, keyed on a session GUC such as
+-- current_setting('app.platform'), was rejected: app.* is a placeholder
+-- GUC any role may set, so a tenant-path bug that set it by accident or
+-- by a copy-pasted line would read every platform row. ADR-108 already
+-- decided this class of question once — isolation rests on a role grant,
+-- not only on the schema — and this is that principle applied a second
+-- time rather than a new one. ADR-112
+CREATE TABLE platform_audit_event (
+    id                 bigserial PRIMARY KEY,
+    actor_principal_id uuid,
+    action             text NOT NULL,
+    object_type        text,
+    object_id          uuid,
+    outcome            text NOT NULL,
+    severity           text NOT NULL,
+    context            jsonb,
+    occurred_at        timestamptz NOT NULL DEFAULT now()
+);
+-- Written by every platform-plane decision, including a DENY, exactly as
+-- audit_event is for the tenant plane (8.5). Read by nothing yet:
+-- may_read_platform_audit (A1.2) now has a referent, but no endpoint
+-- reads it. Open, C2, 11.2.
 ```
 
 ---
@@ -1034,7 +1113,7 @@ CREATE TABLE audit_event (
 | Guardian ≠ minor                                        | `CHECK`                                                            |
 | Affiliation not self-referential                        | `CHECK`                                                            |
 | Tenant isolation                                        | RLS, four documented exemptions                                    |
-| No cycles in the DAG                                    | recursive CTE, pre-commit                                          |
+| No cycles in the DAG                                    | recursive CTE, pre-commit, depth 12 (A2.2, ADR-016)                |
 | One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`                   |
 | One live consumption record per person per type per day | partial unique index                                               |
 | A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                                  |
@@ -1058,6 +1137,9 @@ exist yet.
 
 ```sql
 CREATE INDEX ON membership (tenant_id, person_id, state);
+-- ADR-104: GET .../units/{unit}/members checks the scope once, then
+-- SELECT ... WHERE org_unit_id = $1. This is the index that query hits.
+CREATE INDEX ON membership (tenant_id, org_unit_id);
 CREATE INDEX ON allocation USING gist (resource_id, period);
 CREATE INDEX ON booking (tenant_id, resource_id, state);
 CREATE INDEX ON authorization_edge (child_type, child_id);

@@ -21,6 +21,21 @@ mismatch is rejected (ADR-105). A tenant-plane route with no `{tenant}` does
 not exist; a platform-plane route reaching a tenant object is a defect
 (invariant 9, 8.12).
 
+**The converse holds too, and nothing stated it until now.** A tenant-bound
+credential must not reach a platform-plane route, and a platform credential
+must not satisfy the tenant-plane match. Both are refused at the edge, before
+a handler runs:
+
+```txt
+tenant credential   -> platform route     refused: PlatformOnly gate fails
+platform credential -> tenant route       refused: TenantMatch never matches
+                                           a plane the token did not name
+```
+
+`PlatformOnly` and `TenantMatch` are mutually exclusive gates over the same
+credential (ADR-111): a request satisfies exactly one, never both and never
+neither.
+
 ---
 
 ## A3.2 Authentication
@@ -34,13 +49,24 @@ Resolved through the port of ADR-106 to:
 ```txt
 principal_id      the subject of every tuple
 principal_kind    PERSONAL | STAFF | ELEVATED
-tenant_id         compared against the path
+plane             PLATFORM, or absent for the tenant plane
+tenant            required when plane is absent; must be ABSENT
+                  when plane is PLATFORM
 expires_at        checked at decision time, never by a sweeper
 ```
 
 A person acting as themselves, as staff, and with elevated authority are
 three different principals, and therefore three different subjects (05.2.3).
 Nothing in the API lets one request carry more than one.
+
+**The polarity of `plane` is the load-bearing part, not its presence**
+(ADR-111). The zero value of a `Principal` — every field left at its Go
+default — must be the tenant plane, never the platform plane. A `Principal`
+constructed without thinking about it, in a test fixture, a partially-filled
+struct literal, or a provider that forgot to set the field, must come out
+ordinary and tenant-bound rather than holding platform authority nobody
+granted it. This is the same argument as ADR-106's `dev` build tag: the
+accidental case must be the safe one, never the dangerous one.
 
 ---
 
@@ -169,13 +195,23 @@ own code rather than the first response:
 Returning the original would silently discard the second request, which is
 the failure this header exists to prevent, inverted.
 
+**The mechanism does not cover the platform plane, and this is accepted
+rather than fixed.** `idempotency_key.tenant_id` is `NOT NULL REFERENCES
+tenant` and the table is under RLS — there is no tenant to key a platform
+request by. A retried `POST /platform/tenants` therefore creates a second
+tenant, with a second owner principal, and nothing here stops it. This
+scope's own rule is "every POST that creates money or a consumption record",
+and a tenant is neither, so the gap is a narrowing of scope rather than an
+oversight — but it belongs in 11.2 rather than being found the way every
+other gap in this design has been found. Recorded there.
+
 ---
 
 ## A3.7 The slice
 
 ```txt
 PLATFORM
-  POST   /platform/tenants                         create tenant
+  POST   /platform/tenants                         create tenant + owner
 
 ORGANIZATION
   POST   /t/{t}/units                              create org unit
@@ -216,6 +252,83 @@ ME
 
 `/me` is what makes one permission-gated app possible: the client renders
 from the permissions it is told it has, rather than from a role it guessed.
+
+### Platform provisioning creates a tenant AND its first owner
+
+```txt
+POST /platform/tenants
+{ "legal_name": ..., "display_name": ..., "jurisdiction": ...,
+  "owner": { "display_name": ..., "idp_subject": ... } }
+
+creates   tenant row
+          person row          the owner, globally
+          principal row       kind STAFF — the owner acts for the
+                              association, not as themselves (05.2.3)
+publishes principal:<p> owner tenant:<t>   through the outbox, fenced
+```
+
+One transaction, or the tenant is inert (ADR-113). Without an owner
+principal nothing can create a unit, a plan or a person in the new tenant —
+a `tenant` row with no path to `owner` is a tenant the API can never again
+reach into, since every write past this point checks `admin` or something
+that resolves through it.
+
+The owner's principal is `STAFF`, not `PERSONAL`: they act for the
+association from the moment the tenant exists, before any person of theirs
+has logged in as themselves. This is the same distinction ADR-106 draws
+between a support engineer's routine booking and their operational
+authority — here, drawn at the very first principal a tenant ever has.
+
+**Why one transaction, not a saga.** `tenant`, `person`, `principal` and
+`authorization_outbox` all carry no `tenant_id` and none is under RLS — there
+is no tenant context to run inside, because the tenant is what is being
+born. So the whole bootstrap runs in one plain pool connection's transaction,
+with no cross-service step to compensate if it fails partway. The `owner`
+tuple is written to the outbox in the same transaction as the rows it
+describes, fenced exactly as every other authorization fact is (ADR-101).
+
+### Organization endpoints, and the permissions nothing had named
+
+```txt
+POST /t/{t}/units       check: admin on the named parent (tenant or unit)
+GET  /t/{t}/units/{unit}  check: member on the unit
+```
+
+`POST /t/{t}/units` checks `admin` on whichever parent the request names —
+`tenant:{t}` for a top-level unit, an existing unit for a nested one. No
+model change was needed for either endpoint: `organizational_unit.admin`
+already resolves `admin from auth_parent`, and a unit's `member` already
+resolves `member from auth_parent`, so a tenant admin reaches
+`GET /t/{t}/units/{unit}` through `member from auth_parent` without anything
+new being declared.
+
+Creating a unit does **not** create its `auth_parent` edge automatically
+(05.1.3 invariant 4, ADR-016). The endpoint writes both the `organizational_unit`
+row and the edge in one transaction, running the cycle check (A2.2) before
+committing either — the invariant that "creating a unit with an org parent
+does not implicitly create an authorization edge" describes the model, not
+this endpoint's convenience; the endpoint may offer the matching edge, and
+here it does, explicitly, as its own write.
+
+### `GET /t/{t}/units/{unit}/members`
+
+Lists memberships whose `org_unit_id` names the unit **in the request path,
+and no other** — not its descendants. This is ADR-104's permitted
+under-reporting: the mechanism must never over-report, and folding
+descendants into the list would require either a recursive query per list
+(unbounded by page size) or a denormalized closure table this design does
+not carry.
+
+**The asymmetry is deliberate and worth stating plainly, because it looks
+like a bug.** `organizational_unit.member_read` DOES reach descendants in
+the graph (A1.4) — a caller authorized at a parent may list a **child's**
+members by naming the child explicitly. What that caller never sees is a
+child's members folded into the **parent's** list; a parent's list shows
+only memberships whose `org_unit_id` is the parent itself. Authority
+propagates down the DAG; the membership rows do not fold up it.
+
+An association-level membership — `org_unit_id IS NULL` — appears under no
+unit's list at all, by the same rule (A2.4). Open, 11.2.
 
 ### Why configuration is here at all
 

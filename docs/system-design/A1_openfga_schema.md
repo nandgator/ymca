@@ -102,6 +102,14 @@ type tenant
     define safeguarding_reader: [principal, role_assignment#holder]
     define may_approve_membership: [principal, role_assignment#holder] or admin
 
+    # person is global and carries no tenant_id (A2.1): nothing about
+    # the row itself says which tenant may create one. This relation
+    # is the "application-level relationship check" A2.1 promised and
+    # never had — registering a person is an act over this tenant, not
+    # over the (tenant-less) row. Role-grantable, same as the three
+    # above. ADR-114, ADR-110
+    define may_register_person: [principal, role_assignment#holder] or admin
+
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
     # same sense in 05.1.5 — that one is granted on `affiliation`
@@ -545,6 +553,16 @@ principal:natl-sec       may_administer       affiliation:india-bombay
 principal:bob-elevated   administered_by      tenant:bombay
 ```
 
+### Must ALLOW — the platform plane (ADR-005)
+
+```txt
+principal:platform-op    may_provision_tenant platform:main
+```
+
+The platform singleton is `platform:main`. There is exactly one: the platform
+plane has no multi-tenancy of its own, so there is nothing to namespace it
+against.
+
 ### Must ALLOW — the two entitlement routes (ADR-107)
 
 ```txt
@@ -588,6 +606,24 @@ one assertion.
 Verified against real drift, not merely observed to pass: removing the two
 contextual tuples fails exactly these two assertions and no others.
 
+### Must ALLOW — `may_register_person`, direct and via role (ADR-114)
+
+```txt
+principal:bombay-admin    may_register_person  tenant:bombay
+```
+
+The tenant's own admin reaches it through `or admin`, the same shape as
+`may_approve_membership`. It also resolves through a role, exactly as
+`finance_reader` does — supplied as a contextual tuple, never stored
+(ADR-109, A1.8 rule 8):
+
+```txt
+principal:frontdesk       may_register_person  tenant:bombay
+```
+
+Front desk staff who take applications but do not admit members are the
+ordinary case this route exists for (05.3.4).
+
 ### Must REFUSE — the grantable set (ADR-110)
 
 Not denials. The model must reject these writes outright.
@@ -626,6 +662,12 @@ principal:platform-op  member_read          organizational_unit:bombay/procter
 principal:platform-op  viewer               invoice:bombay/inv-1
 principal:platform-op  may_use              resource:bombay/procter-pool
 
+# Invariant 9, the other direction — a tenant admin reaches no platform
+# object. Proved separately from the line above: that one shows the
+# platform plane cannot read tenant data, this one shows a tenant
+# cannot reach platform lifecycle authority. Neither implies the other.
+principal:bombay-admin may_provision_tenant platform:main
+
 # Invariant 1 — no cross-tenant leakage
 person:alice           may_use              resource:pune/central-pool
 principal:alice        member_read          organizational_unit:pune/central
@@ -643,11 +685,21 @@ principal:bombay-secretary unit_close       organizational_unit:bombay/procter
 
 # Personal principal holds no elevated authority
 principal:bob-personal administered_by      tenant:bombay
+
+# may_register_person is not membership. ADR-114
+principal:alice        may_register_person  tenant:bombay
 ```
 
 The first block is the one that matters. If `natl-sec` ever resolves to
 `member_read`, the design's central claim has failed and the change must be
 rejected regardless of what else it enables.
+
+`principal:alice`'s plain membership does not reach `may_register_person`:
+holding the row a tenant grants for showing up (`member`) is not the same as
+holding the relation a tenant grants for a job (`role_assignment#holder` or
+`admin`). Entitlement and membership are excluded from the grantable set for
+the same reason (ADR-110); this is that same boundary checked on the newest
+relation.
 
 ---
 
@@ -680,6 +732,10 @@ rejected regardless of what else it enables.
 
 Rule 5 is the enforcement point for ADR-018. A type with no tenant path is
 either a platform-plane object or a defect, and the schema must say which.
+`platform` is the type this exempts — the only one, and no longer a
+hypothetical: `POST /platform/tenants` reaches `platform:main` for real
+(ADR-113), so a defect in this exemption would now be a live one rather than
+an unused branch of the rule.
 
 Rules 8 and 9 exist for the same reason as rule 7, one round later. Rule 8 is
 what keeps ADR-070 true: a stored role tuple outlives the term that justified

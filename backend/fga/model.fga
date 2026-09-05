@@ -60,6 +60,14 @@ type tenant
     define safeguarding_reader: [principal, role_assignment#holder]
     define may_approve_membership: [principal, role_assignment#holder] or admin
 
+    # person is global and carries no tenant_id (A2.1): nothing about
+    # the row itself says which tenant may create one. This relation
+    # is the "application-level relationship check" A2.1 promised and
+    # never had — registering a person is an act over this tenant, not
+    # over the (tenant-less) row. Role-grantable, same as the three
+    # above. ADR-114, ADR-110
+    define may_register_person: [principal, role_assignment#holder] or admin
+
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
     # same sense in 05.1.5 — that one is granted on `affiliation`

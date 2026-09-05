@@ -11,8 +11,8 @@ import (
 )
 
 // A1.8 rule 10. ADR-110 says a permission is role-grantable if and only if
-// `role_assignment#holder` is in its type restriction in A1.2. Migration 0002
-// repeats that set as `grantable_permission` rows, so that role_permission can
+// `role_assignment#holder` is in its type restriction in A1.2. The migrations
+// repeat that set as `grantable_permission` rows, so that role_permission can
 // reference it with a foreign key.
 //
 // Two statements of one set is a drift waiting to happen, and the drift is
@@ -31,7 +31,7 @@ func TestGrantableSetMatchesMigration(t *testing.T) {
 
 	for _, p := range difference(fromModel, fromSeed) {
 		t.Errorf("%s names role_assignment#holder in A1.2 but is not seeded "+
-			"into grantable_permission by migration 0002", p)
+			"into grantable_permission by any migration", p)
 	}
 	for _, p := range difference(fromSeed, fromModel) {
 		t.Errorf("%s is seeded into grantable_permission but does not name "+
@@ -79,36 +79,81 @@ func grantableFromModel(t *testing.T) []string {
 	return out
 }
 
-// grantableFromMigration reads the INSERT that seeds grantable_permission.
-// It deliberately reads the migration rather than the live database: this
+// grantableFromMigration reads every INSERT that seeds grantable_permission,
+// across all migrations, and returns their union.
+//
+// It deliberately reads the migrations rather than the live database: this
 // test must fail on a checkout, before anything has been applied anywhere.
+//
+// It reads ALL of them, not migration 0002 alone, and that is not tidiness.
+// The first version looked only at 0002 because 0002 was the only migration
+// that seeded anything. The moment a second one did — 0004, adding
+// tenant.may_register_person — the guard failed claiming the permission was
+// "not seeded", which was false, and named 0002 as the file to fix. Under
+// forward-only migrations (07.4) 0002 has already been applied and must never
+// be edited, so the message pointed squarely at the one repair that would
+// corrupt the schema. A guard whose failure message sends you the wrong way
+// is worse than no guard.
+//
+// Known limitation, stated rather than hidden: this unions INSERTs and does
+// not interpret a DELETE. A migration that retires a permission by deleting
+// its row would leave this test still expecting it. Nothing does that yet;
+// when something does, this function has to grow a notion of order.
 func grantableFromMigration(t *testing.T) []string {
 	t.Helper()
 
-	b, err := migrations.FS.ReadFile("0002_roles.sql")
+	entries, err := migrations.FS.ReadDir(".")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read migrations: %v", err)
 	}
 
 	const marker = "INSERT INTO grantable_permission (permission) VALUES"
-	body := string(b)
-	i := strings.Index(body, marker)
-	if i < 0 {
-		t.Fatalf("migration 0002 no longer contains %q", marker)
-	}
 
+	seen := make(map[string]bool)
 	var out []string
-	for _, raw := range strings.Split(body[i+len(marker):], "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
+	files := 0
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-		m := seedValue.FindStringSubmatch(line)
-		if m == nil {
-			break // end of the VALUES list
+		b, err := migrations.FS.ReadFile(e.Name())
+		if err != nil {
+			t.Fatalf("read migration %s: %v", e.Name(), err)
 		}
-		out = append(out, m[1])
+		body := string(b)
+
+		// A single migration may seed more than once; take every block.
+		for rest := body; ; {
+			i := strings.Index(rest, marker)
+			if i < 0 {
+				break
+			}
+			files++
+			rest = rest[i+len(marker):]
+			for _, raw := range strings.Split(rest, "\n") {
+				line := strings.TrimSpace(raw)
+				if line == "" {
+					continue
+				}
+				m := seedValue.FindStringSubmatch(line)
+				if m == nil {
+					break // end of the VALUES list
+				}
+				if !seen[m[1]] {
+					seen[m[1]] = true
+					out = append(out, m[1])
+				}
+			}
+		}
 	}
+
+	if files == 0 {
+		t.Fatalf("no migration contains %q — the seeding spelling has changed, "+
+			"and this test would otherwise report every grantable permission "+
+			"as missing", marker)
+	}
+
 	sort.Strings(out)
 	return out
 }

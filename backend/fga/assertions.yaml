@@ -45,6 +45,10 @@ tuples:
   - { user: "principal:bombay-finance", relation: "finance_reader", object: "tenant:bombay" }
   # Break-glass, on the ELEVATED principal. Expiry lives in PostgreSQL.
   - { user: "principal:bob-elevated", relation: "jit_grantee", object: "tenant:bombay" }
+  # Tenant-level admin, distinct from procter-admin's unit-level grant above.
+  # Needed for the platform-plane invariant 9 reverse direction and for
+  # may_register_person's direct (non-role) route. ADR-113, ADR-114
+  - { user: "principal:bombay-admin", relation: "admin", object: "tenant:bombay" }
 
   # ── Bombay · Alice's membership and entitlements ──────────
   - { user: "principal:alice", relation: "principal", object: "person:alice" }
@@ -146,6 +150,12 @@ contextual:
   - { user: "principal:bombay-treasurer", relation: "subject", object: "role_assignment:ra-002" }
   - { user: "role_assignment:ra-002#holder", relation: "finance_reader", object: "tenant:bombay" }
 
+  # Front desk holds may_register_person by role, not by being tenant admin —
+  # the ordinary case of 05.3.4: whoever takes the application registers the
+  # person; admitting them is a separate permission. ADR-114
+  - { user: "principal:frontdesk", relation: "subject", object: "role_assignment:ra-003" }
+  - { user: "role_assignment:ra-003#holder", relation: "may_register_person", object: "tenant:bombay" }
+
   - { user: "principal:mallory", relation: "subject", object: "role_assignment:ra-666" }
 
 # ─────────────────────────────────────────────────────────────
@@ -197,6 +207,12 @@ assertions:
     user: "principal:warden"
     relation: "may_record_for_other"
     object: "consumption_type:bombay/dinner"
+    expect: true
+
+  - name: "the platform operator may provision a tenant"
+    user: "principal:platform-op"
+    relation: "may_provision_tenant"
+    object: "platform:main"
     expect: true
 
   - name: "alice may read members at Procter"
@@ -285,6 +301,26 @@ assertions:
     object: "resource:pune/central-pool"
     expect: true
 
+  # ── A1.7 · may_register_person, direct and via role (ADR-114) ──
+
+  - name: "the tenant admin may register a person"
+    user: "principal:bombay-admin"
+    relation: "may_register_person"
+    object: "tenant:bombay"
+    expect: true
+
+  - name: "front desk may register a person, by role, without being tenant admin"
+    user: "principal:frontdesk"
+    relation: "may_register_person"
+    object: "tenant:bombay"
+    expect: true
+
+  - name: "a plain member may not register a person"
+    user: "principal:alice"
+    relation: "may_register_person"
+    object: "tenant:bombay"
+    expect: false
+
   # ── A1.7 · Invariant 2 — the central claim of the design ──
   # natl-sec holds all five verbs and reaches nothing.
 
@@ -360,6 +396,12 @@ assertions:
     user: "principal:platform-op"
     relation: "may_use"
     object: "resource:bombay/procter-pool"
+    expect: false
+
+  - name: "invariant 9, reverse — a tenant admin reaches no platform object"
+    user: "principal:bombay-admin"
+    relation: "may_provision_tenant"
+    object: "platform:main"
     expect: false
 
   # ── A1.7 · Invariant 1 — no cross-tenant leakage ──
