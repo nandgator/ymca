@@ -32,6 +32,7 @@ internal/authz/roles.go    step 2 — effective assignments, per check
 internal/audit/            8.5's DENY record
 internal/idempotency/      A3.6 — the key is stored with the work it describes
 internal/outbox/           ADR-101 — the fence, and the dispatcher
+internal/page/             A3.5 keyset pagination; the cursor is opaque
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
@@ -338,6 +339,9 @@ Recorded in `A2.1` and `11.2`, not worked around here:
 - **The renderer registry is empty.** `outboxRenderers()` in `cmd/api` gains
   an entry per domain event in 8.3. Until then the dispatcher runs and finds
   nothing, which is correct — no domain event is published yet.
+- **`invalid_request` had no code until now.** A3.4 listed no status for a
+  malformed request at all; a bad cursor, an out-of-range limit and an
+  unreadable body had nowhere to go. Added as 400.
 - **No dispatcher metrics.** 7.4 makes undispatched rows older than a
   threshold an operational alert. `attempts` and `last_error` are recorded
   per row; nothing watches them (C4).

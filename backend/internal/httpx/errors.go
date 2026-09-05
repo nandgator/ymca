@@ -8,24 +8,31 @@ import "net/http"
 type Code string
 
 const (
+	CodeInvalidRequest  Code = "invalid_request"
 	CodeUnauthenticated Code = "unauthenticated"
 	CodeTokenExpired    Code = "token_expired"
 	CodeTenantMismatch  Code = "tenant_mismatch"
 	CodeForbidden       Code = "forbidden"
 	CodeNotFound        Code = "not_found"
-	CodeInternal        Code = "internal"
+	// CodeIdempotencyKeyReused is A3.6's 409: the same key arrived with a
+	// different body. Replaying the first response would silently discard
+	// the second request, which is that header's own failure mode inverted.
+	CodeIdempotencyKeyReused Code = "idempotency_key_reused"
+	CodeInternal             Code = "internal"
 )
 
 // httpStatus is D7's HTTP status for each code. tenant_mismatch and
 // forbidden are both 403 — ADR-105: refusing a tenant the caller named
 // themselves discloses nothing, so it does not fall back to 401.
 var httpStatus = map[Code]int{
-	CodeUnauthenticated: http.StatusUnauthorized,
-	CodeTokenExpired:    http.StatusUnauthorized,
-	CodeTenantMismatch:  http.StatusForbidden,
-	CodeForbidden:       http.StatusForbidden,
-	CodeNotFound:        http.StatusNotFound,
-	CodeInternal:        http.StatusInternalServerError,
+	CodeInvalidRequest:       http.StatusBadRequest,
+	CodeUnauthenticated:      http.StatusUnauthorized,
+	CodeTokenExpired:         http.StatusUnauthorized,
+	CodeTenantMismatch:       http.StatusForbidden,
+	CodeForbidden:            http.StatusForbidden,
+	CodeNotFound:             http.StatusNotFound,
+	CodeIdempotencyKeyReused: http.StatusConflict,
+	CodeInternal:             http.StatusInternalServerError,
 }
 
 type errorBody struct {

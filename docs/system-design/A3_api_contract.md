@@ -73,6 +73,7 @@ caller could not already name.
 The codes every endpoint may emit, and their status:
 
 ```txt
+400  invalid_request    the request could not be read as one
 401  unauthenticated    no credential, or one that will not be accepted
 401  token_expired      the credential was valid and no longer is
 403  tenant_mismatch    the path names a tenant the token does not
@@ -81,6 +82,17 @@ The codes every endpoint may emit, and their status:
 409  idempotency_key_reused  same key, different request body (A3.6)
 500  internal           anything the caller cannot act on
 ```
+
+`invalid_request` covers a body that is not the JSON the endpoint documents, a
+`limit` outside its range, and a `cursor` that does not decode. It is the one
+code whose `message` may name the offending field, because the caller supplied
+it and telling them discloses nothing they did not already send.
+
+**A malformed cursor is refused, not ignored.** The tempting alternative —
+treat it as absent and start from the beginning — silently returns the wrong
+page, and a pager that silently restarts is worse than one that stops. This is
+the opposite of the rule for `X-Request-Id` above, and the difference is that a
+correlation id does not change the answer.
 
 `unauthenticated` collapses every reason a credential was refused — missing,
 malformed, bad signature, unknown subject, suspended principal — into one
