@@ -971,6 +971,36 @@ CREATE INDEX outbox_fence
 -- This table projects authorization facts only; it is not the
 -- inter-context event bus of 05.0.8.
 
+-- A3.6 requires an Idempotency-Key on every POST that creates money or a
+-- consumption record, and requires the result to be stored so a repeat
+-- returns the original response. A2 defined no table for it until R9; the
+-- contract asked for storage the schema never provided.
+--
+-- The row is written INSIDE the transaction that does the work, carrying the
+-- response. That is what makes it correct rather than merely helpful: effect
+-- and record commit together or not at all, so there is no in-flight state to
+-- reason about and a rolled-back attempt leaves nothing to replay. Two
+-- concurrent identical requests both do the work; the second loses the
+-- primary key race, rolls back, reads the winner's row and replays it.
+CREATE TABLE idempotency_key (
+    tenant_id      uuid NOT NULL REFERENCES tenant,
+    key            text NOT NULL,          -- client-generated
+    endpoint       text NOT NULL,          -- method + route pattern
+    -- A key replayed against a different body is a client defect, not a hit.
+    -- Returning the first response would silently discard the second request;
+    -- this makes it a 409 instead. 8.8: the denial is specific.
+    request_digest text NOT NULL,          -- sha256 of the request body
+    principal_id   uuid NOT NULL REFERENCES principal,
+    status_code    int NOT NULL,
+    -- jsonb, not text: the database validates what it stores. The cost is
+    -- that a replay is semantically the original response rather than
+    -- byte-identical, because jsonb normalizes whitespace and key order.
+    -- A3.6 states that consequence rather than leaving it to be discovered.
+    response_body  jsonb NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, endpoint, key)
+);
+
 CREATE TABLE audit_event (
     id                    bigserial PRIMARY KEY,
     tenant_id             uuid,      -- null for platform-plane
@@ -1035,6 +1065,7 @@ CREATE INDEX ON authorization_edge (parent_type, parent_id);
 CREATE INDEX ON verification (subject_type, subject_id, type, status);
 CREATE INDEX ON restriction (person_id) WHERE lifted_at IS NULL;
 CREATE INDEX ON audit_event (tenant_id, occurred_at DESC);
+CREATE INDEX ON idempotency_key (created_at);   -- for expiry sweeps
 CREATE INDEX ON consumption_record (tenant_id, subject_person_id, occurred_on);
 
 -- 6.1 step 2 runs on every check. This is the index it must hit.

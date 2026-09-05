@@ -78,6 +78,7 @@ The codes every endpoint may emit, and their status:
 403  tenant_mismatch    the path names a tenant the token does not
 403  forbidden          the check of 6.1 denied
 404  not_found          absent, or the caller may not know it exists (A3.3)
+409  idempotency_key_reused  same key, different request body (A3.6)
 500  internal           anything the caller cannot act on
 ```
 
@@ -133,6 +134,28 @@ creating a second row.
 
 A warden on hostel wifi will retry. Without this, a retried meal is a second
 meal and a retried payment is a second payment.
+
+The key is stored in `idempotency_key` (A2.10) **inside the transaction that
+does the work**, so the effect and the record of it commit together.
+
+A replay is **semantically** the original response, not byte-identical. The
+body is stored as `jsonb`, which normalizes insignificant whitespace and may
+reorder keys — invisible to any JSON client, and the price of the database
+validating what it stores rather than holding opaque text. Nothing in this API
+signs or hashes a response body; if anything ever does, this is the decision
+it must revisit. A
+rolled-back attempt therefore leaves nothing behind, and a retry proceeds
+fresh rather than replaying a response for work that never happened.
+
+A key replayed against a **different body** is a client defect and gets its
+own code rather than the first response:
+
+```txt
+409  idempotency_key_reused   same key, different request
+```
+
+Returning the original would silently discard the second request, which is
+the failure this header exists to prevent, inverted.
 
 ---
 
