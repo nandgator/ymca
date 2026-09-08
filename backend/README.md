@@ -14,6 +14,9 @@ where a file here records a deviation explicitly.
 migrations/0001_init.sql   the full A2 schema, 54 tables, RLS on 34
 migrations/0002_roles.sql  A2.7 roles, A2.8 restriction mapping, RLS on 2
 migrations/0003_idempotency.sql  A3.6's store, which A2 had never defined
+migrations/0004_platform.sql     platform audit, may_register_person, org_unit_id
+migrations/0005_authorization_edge_invariants.sql
+                           ADR-016's three invariants, as a trigger (ADR-115)
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)
@@ -22,7 +25,9 @@ fga/embed.go               go:embed and the assertion parser
 fga/sync_test.go           A1.8 rules 7-9, machine-checked
 fga/grantable_test.go      A1.8 rule 10 — the model vs every migration
 cmd/fga/                   applies the model, runs the assertions
-cmd/api/                   the HTTP server, /me, configuration, platform
+cmd/api/                   the HTTP server, /me, configuration, platform,
+                           people and units
+cmd/api/handlers.go        the 6.1 check, A3.4's error mapping, body decoding
 internal/config/           environment configuration
 internal/db/               the pool, and the tenant transaction (8.2)
 internal/auth/             the ADR-106 port and its provider registry
@@ -35,8 +40,11 @@ internal/idempotency/      A3.6 — the key is stored with the work it describes
 internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/page/             A3.5 keyset pagination; the cursor is opaque
 internal/membership/       bundles, plans, and their outbox renderers
+internal/membership/members.go   ADR-104's unit member list
+internal/identity/         people — global rows, tenant-gated (ADR-114)
 internal/consumption/      consumption types (05.10)
 internal/organization/     tenants and their first owner (ADR-113)
+internal/organization/units.go   units and the DAG edges (ADR-016, ADR-115)
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
@@ -45,13 +53,12 @@ internal/httpx/            the middleware chain, A3.4's errors
 ```txt
 compose.yaml     not needed — postgres and openfga already run under podman
 Dockerfile       not needed until there is something to deploy
-identity  finance                            the rest of 8.3
+finance/                                     the rest of 8.3
 ```
 
-`membership/` and `consumption/` now exist and hold what 8.3's configuration
-endpoints needed — bundles, plans, consumption types. Admission, consumption
-records and the finance endpoints are still unwritten; see the handoff §8 for
-the order and what to read first.
+`membership/`, `consumption/`, `organization/` and `identity/` now exist.
+Admission, consumption records and the finance endpoints are still unwritten;
+see the handoff §8 for the order and what to read first.
 
 ---
 
@@ -130,8 +137,25 @@ which of five tenant-scoped permissions they hold. Each is a full 6.1 check
 against the tenant named in the path — the endpoint reports no object-scoped
 permission, deliberately, because a `/me` that enumerated them would be the
 reverse index `ADR-104` and `8.11` exist to prevent. Beside it are A3.7's
-configuration endpoints (bundles, plans, consumption types) and one
-platform-plane route.
+configuration endpoints (bundles, plans, consumption types), the
+people-and-units endpoints, and one platform-plane route.
+
+```txt
+POST /api/v1/t/{t}/people               may_register_person   ADR-114
+POST /api/v1/t/{t}/units                admin on the NAMED PARENT
+GET  /api/v1/t/{t}/units/{unit}         member on the unit
+GET  /api/v1/t/{t}/units/{unit}/members member_read on the unit  ADR-104
+```
+
+`POST /units` writes the unit row and its `authorization_edge` in one
+transaction. The edge is **not** derived from `org_parent_id` and never may
+be (05.1.3 invariant 4) — the request names its authorization parent
+explicitly, and that named parent is what `admin` is checked against.
+
+Creating two levels at once needs a dispatch between them. The new unit's
+`auth_parent` tuple is a grant, so it reaches OpenFGA when the dispatcher
+runs; until then a request to create a child beneath it is refused. That is
+`ADR-101`'s asymmetry, not a race.
 
 ### The two planes
 
@@ -216,6 +240,12 @@ than no test. They prove the things unit tests cannot — that RLS actually
 isolates, that an unset `app.tenant_id` raises, that a real OpenFGA tuple
 produces ALLOW and its absence produces an audited DENY, and that `GET /me`
 returns exactly the permissions the graph grants.
+
+They prove the DAG is a DAG, too, and only because they write edges the way
+nothing in the application does — straight at the table, with no `CreateUnit`
+in the path. Had they gone through the endpoint, the cycle and depth cases
+would be testing its arithmetic rather than the database's invariant, and
+removing the trigger would leave them green.
 
 They also now prove the claim ADR-109 exists to make. `TestRoleAssignment_
 AgainstRealStore` holds a role assignment fixed in OpenFGA — there is nothing
@@ -328,8 +358,8 @@ Verified against the running cluster: a `ymca_api` connection with
 
 There is none outstanding. Everything this directory does that the record did
 not originally say has been written into it (`8.2`, `8.5`, `ADR-106`,
-`ADR-107`, `ADR-108`, `A1.1`, `A1.6`, `A1.7`, `A1.8` rule 7, `A2.1`, `A2.2`,
-`A3.2`, `A3.4`, `A3.9`, `11.2`, `12`).
+`ADR-107`, `ADR-108`, `ADR-115`, `A1.1`, `A1.6`, `A1.7`, `A1.8` rule 7,
+`A2.1`, `A2.2`, `A3.2`, `A3.4`, `A3.7`, `A3.9`, `05.1.3`, `11.2`, `12`).
 
 What remains is formatting, and it is checked rather than promised:
 
@@ -372,6 +402,40 @@ A1.7's first assertion could not resolve, and `entitlement_bundle.via_plan`
 was declared and read by nothing. All three are fixed; the guard is what stops
 the fourth.
 
+### The DAG invariants
+
+`ADR-016`'s three invariants on `authorization_edge` — no cycles, both
+endpoints in this tenant, at most 12 edges on any path — are enforced by a
+`BEFORE INSERT OR UPDATE` trigger (`0005`, `ADR-115`), not by the endpoint.
+
+The reason is not tidiness. **A cycle is unreachable through
+`POST /t/{t}/units` by construction**: nothing points at a unit that did not
+exist a moment ago, so that endpoint can only ever violate the depth bound.
+A checker living there could never be observed to fail, which is
+indistinguishable from one that cannot — and `05.1.3` words the invariant as
+"enforced on every write", which a checker the caller invokes is not.
+
+Two details that look like oversights:
+
+- The recursion carries its own depth bound. An unbounded recursive CTE over
+  a graph that already holds a cycle does not terminate, and a guard that
+  hangs is worse than one that refuses.
+- The function is **not** `SECURITY DEFINER`. It reads two tables under
+  `FORCE ROW LEVEL SECURITY`, and a superuser definer would traverse other
+  tenants' edges to decide this tenant's invariant — `ADR-108`'s point, in a
+  place it would be easy to lose.
+
+`internal/organization` maps the refusal to a domain error **by constraint
+name**, which makes that name a contract with Go that nothing else in the
+build would notice breaking: a rename compiles, vets clean, and silently
+turns every refusal into a 500. `TestCreateUnit_MapsTheTriggerToDomainErrors`
+asserts the name the database actually sends.
+
+Drift-tested rather than observed to pass. Disabling the trigger fails four
+tests; renaming one constraint fails exactly one, and leaves the other three
+green because the cycle is still refused — just under a name Go does not
+know. That discrimination is the point.
+
 ### Known gaps, carried deliberately
 
 Recorded in `A2.1` and `11.2`, not worked around here:
@@ -380,9 +444,16 @@ Recorded in `A2.1` and `11.2`, not worked around here:
   `charge` and `charge_component` mean an invoice id reaches its contents.
 - **`verification`, `clearance`, `audit_event` have nullable `tenant_id`.**
   The policy makes those global rows invisible to every tenant connection.
-- **No cycle check on `authorization_edge`.** A2.2 specifies a pre-commit
-  recursive CTE bounded at depth 12; it is application code and unwritten.
-  Until it exists the DAG is a graph.
+- **A unit gets one authorization parent through the API.** `ADR-016`
+  permits many — its own example puts a pool under both a chapter and a
+  department — and `POST /units` creates the first. Nothing adds a second.
+- **The depth limit is not configurable.** `A2.2` says "configured maximum,
+  defaulting to 12"; `0005` makes it a constant in the trigger.
+- **Three edge types are refused rather than validated.** `A1.2` declares
+  `auth_parent` on `resource`, `programme` and `consumption_type`; the
+  trigger refuses them rather than admitting an edge whose endpoints nothing
+  checked. Fail-closed, and the migration that makes one writable must
+  extend the check.
 - **`audit_event` is not partitioned.** A2.10 marks it monthly on
   `occurred_at`; C3 records that there are no scale figures to size it against.
 - **No office or committee appointment workflow.** `office_conferred_role`
