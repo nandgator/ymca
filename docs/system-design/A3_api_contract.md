@@ -290,8 +290,45 @@ describes, fenced exactly as every other authorization fact is (ADR-101).
 ### Organization endpoints, and the permissions nothing had named
 
 ```txt
-POST /t/{t}/units       check: admin on the named parent (tenant or unit)
+POST /t/{t}/units         check: admin on the named parent (tenant or unit)
 GET  /t/{t}/units/{unit}  check: member on the unit
+```
+
+```txt
+POST /t/{t}/units
+{ "type": "CHAPTER", "name": ...,
+  "parent": { "type": "tenant" | "organizational_unit", "id": ... },
+  "org_parent_id": ...            optional, and NOT the authorization edge }
+
+creates   organizational_unit row
+          authorization_edge row   child = the new unit, parent = `parent`
+publishes tenant:<t>       tenant       organizational_unit:<u>
+          <parent>         auth_parent  organizational_unit:<u>
+```
+
+`parent` is required and there is exactly one of it. ADR-016 permits many
+authorization parents and this endpoint creates the first; a second is added
+by an endpoint that does not exist in this slice (11.2). `org_parent_id` is
+the ORGANIZATIONAL parent and has no authorization meaning whatever — 05.1.3
+keeps the three containments apart, and passing one does not create an edge.
+
+`location_id` is not accepted. `location` has no endpoint in A3.7, so
+nothing could supply an id that exists; a field that can only ever be null
+would read as a capability the API does not have.
+
+The three refusals a caller can provoke, all from migration 0005's trigger
+(ADR-115), all `invalid_request` except where noted:
+
+```txt
+parent is another tenant       tenant_mismatch, 403, and an audited DENY —
+                               ADR-105 step 1, not the trigger
+parent unit does not exist     forbidden, 403. The `admin` check on it
+                               denies before any row is written, and A3.3
+                               makes that indistinguishable from absence
+path would exceed 12 edges     invalid_request, 400
+edge would close a cycle       conflict is not in D7's vocabulary; this is
+                               invalid_request too, and unreachable from
+                               THIS endpoint (ADR-115)
 ```
 
 `POST /t/{t}/units` checks `admin` on whichever parent the request names —
@@ -309,6 +346,33 @@ committing either — the invariant that "creating a unit with an org parent
 does not implicitly create an authorization edge" describes the model, not
 this endpoint's convenience; the endpoint may offer the matching edge, and
 here it does, explicitly, as its own write.
+
+### `POST /t/{t}/people`
+
+```txt
+POST /t/{t}/people        check: may_register_person on the tenant (ADR-114)
+{ "display_name": ..., "given_name": ..., "family_name": ...,
+  "date_of_birth": ..., "preferred_language": ... }
+
+creates   person row, global, status ACTIVE
+publishes nothing
+```
+
+`display_name` is the only required field. A2.3 makes every name column
+nullable because a real register holds people known by one name, and the
+front desk taking an application (05.3.4) has whatever the applicant gave
+them.
+
+**It publishes no tuple, and that is not an omission.** A1.2's `person` type
+carries `principal` and `guardian` and no tenant relation: a person row is
+reachable in the graph through the memberships and principals that name it,
+never on its own. Registering a person creates somebody the tenant can now
+admit; it grants nothing, which is why ADR-114 could put the permission on
+the tenant rather than on the row.
+
+No principal is created either. `principal.idp_subject` comes from the
+identity provider, and a person registered at a front desk has not
+authenticated anywhere yet.
 
 ### `GET /t/{t}/units/{unit}/members`
 

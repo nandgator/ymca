@@ -182,8 +182,23 @@ CREATE TABLE authorization_edge (
     created_at      timestamptz NOT NULL DEFAULT now(),
     UNIQUE (child_type, child_id, parent_type, parent_id)
 );
--- Cycle detection runs before commit, in a recursive CTE.
--- Depth bounded by policy, default 12.
+-- ADR-016's three invariants are enforced by a BEFORE INSERT OR UPDATE
+-- trigger, not by the caller (ADR-115, migration 0005): no cycles, both
+-- endpoints resolving to this tenant, and at most 12 edges on any path
+-- THROUGH the new edge -- the bound is over the whole path, since an edge
+-- between two existing nodes lengthens one in both directions at once.
+--
+-- The recursion carries its own depth bound. That is not an optimization:
+-- an unbounded recursive CTE over a graph that already holds a cycle does
+-- not terminate, and a guard that hangs is worse than one that refuses.
+--
+-- The function is NOT SECURITY DEFINER. It reads authorization_edge and
+-- organizational_unit, both under FORCE ROW LEVEL SECURITY, and a superuser
+-- definer would traverse other tenants' edges to decide this tenant's
+-- invariant.
+--
+-- Edge types it cannot validate are refused: `auth_parent` is declared on
+-- resource, programme and consumption_type too, and none is writable yet.
 
 CREATE TABLE affiliation (
     id              uuid PRIMARY KEY,
@@ -1102,30 +1117,31 @@ CREATE TABLE platform_audit_event (
 
 ## A2.11 Where the invariants live
 
-| Invariant                                               | Enforced by                                                        |
-| ------------------------------------------------------- | ------------------------------------------------------------------ |
-| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                               |
-| One active membership per tenant                        | partial unique index                                               |
-| One elevated principal per person                       | partial unique index                                               |
-| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                         |
-| One authority verb per pair                             | unique constraint                                                  |
-| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                                    |
-| Guardian ≠ minor                                        | `CHECK`                                                            |
-| Affiliation not self-referential                        | `CHECK`                                                            |
-| Tenant isolation                                        | RLS, four documented exemptions                                    |
-| No cycles in the DAG                                    | recursive CTE, pre-commit, depth 12 (A2.2, ADR-016)                |
-| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`                   |
-| One live consumption record per person per type per day | partial unique index                                               |
-| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                                  |
-| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103                     |
-| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                                |
-| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108         |
-| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises                      |
-| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role                    |
-| An ACTING assignment names its substantive one          | `CHECK (holding_type = 'ACTING') = (substantive IS NOT NULL)`      |
-| A MANDATORY_TERM assignment has an end date             | trigger; the policy lives on `role_definition`. ADR-069            |
-| A role confers only role-grantable permissions          | `role_permission.permission` FK to `grantable_permission`. ADR-110 |
-| An expired term cannot authorize                        | never supplied to the graph. ADR-109, not a constraint             |
+| Invariant                                               | Enforced by                                                          |
+| ------------------------------------------------------- | -------------------------------------------------------------------- |
+| No overlapping allocation                               | `EXCLUDE USING gist` on `allocation`                                 |
+| One active membership per tenant                        | partial unique index                                                 |
+| One elevated principal per person                       | partial unique index                                                 |
+| Cross-tenant grants expire                              | `NOT NULL` on `expires_at`                                           |
+| One authority verb per pair                             | unique constraint                                                    |
+| Party is exactly one kind                               | `CHECK (num_nonnulls(...) = 1)`                                      |
+| Guardian ≠ minor                                        | `CHECK`                                                              |
+| Affiliation not self-referential                        | `CHECK`                                                              |
+| Tenant isolation                                        | RLS, four documented exemptions                                      |
+| No cycles in the DAG                                    | `BEFORE INSERT OR UPDATE` trigger, recursive CTE, depth 12 (ADR-115) |
+| An edge's endpoints resolve to its tenant               | the same trigger; the reads run under RLS, as the app role (ADR-115) |
+| One obligation per person per type at a time            | `EXCLUDE USING gist` on `consumption_obligation`                     |
+| One live consumption record per person per type per day | partial unique index                                                 |
+| A row is never both dispatched and voided               | `CHECK` on `authorization_outbox`                                    |
+| Gapless invoice numbering                               | counter row locked in the issuing txn. ADR-103                       |
+| Tenant isolation survives the table owner               | `FORCE ROW LEVEL SECURITY`. ADR-108                                  |
+| Tenant isolation survives the connecting role           | application role has no superuser, no `BYPASSRLS`. ADR-108           |
+| A query that forgot its tenant fails                    | `current_setting` without `missing_ok` raises                        |
+| `audit_event` is append-only                            | `UPDATE` and `DELETE` revoked from the app role                      |
+| An ACTING assignment names its substantive one          | `CHECK (holding_type = 'ACTING') = (substantive IS NOT NULL)`        |
+| A MANDATORY_TERM assignment has an end date             | trigger; the policy lives on `role_definition`. ADR-069              |
+| A role confers only role-grantable permissions          | `role_permission.permission` FK to `grantable_permission`. ADR-110   |
+| An expired term cannot authorize                        | never supplied to the graph. ADR-109, not a constraint               |
 
 Everything above is enforced by the database rather than by application
 code, because application code can be bypassed by a code path that does not
