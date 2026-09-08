@@ -39,5 +39,55 @@ func Renderers() map[string]outbox.Renderer {
 				Object:   "tenant:" + p.TenantID,
 			}}, nil
 		},
+
+		// The unit's tenant edge. ADR-018: no permission resolves without a
+		// tenant in the path, so this is what makes the unit reachable at
+		// all — `organizational_unit.admin` includes
+		// `administered_by from tenant`, which has nothing to traverse
+		// without it.
+		EventUnitCreated: func(payload json.RawMessage) ([]outbox.Tuple, error) {
+			var p struct {
+				TenantID string `json:"tenant_id"`
+				UnitID   string `json:"unit_id"`
+			}
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return nil, err
+			}
+			if p.TenantID == "" || p.UnitID == "" {
+				return nil, fmt.Errorf("renderer: %s payload lacks tenant_id or unit_id",
+					EventUnitCreated)
+			}
+			return []outbox.Tuple{{
+				User:     "tenant:" + p.TenantID,
+				Relation: "tenant",
+				Object:   "organizational_unit:" + p.UnitID,
+			}}, nil
+		},
+
+		// The DAG edge itself. The direction is the one that catches people:
+		// the PARENT is the user and the CHILD is the object, because
+		// A1.2 declares `auth_parent` ON organizational_unit and OpenFGA
+		// traverses forward from the object. Written the other way round it
+		// reads just as naturally and resolves to nothing — the ADR-107
+		// mistake, in a second place.
+		EventUnitAuthParent: func(payload json.RawMessage) ([]outbox.Tuple, error) {
+			var p struct {
+				UnitID     string `json:"unit_id"`
+				ParentType string `json:"parent_type"`
+				ParentID   string `json:"parent_id"`
+			}
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return nil, err
+			}
+			if p.UnitID == "" || p.ParentType == "" || p.ParentID == "" {
+				return nil, fmt.Errorf("renderer: %s payload lacks unit_id or a parent",
+					EventUnitAuthParent)
+			}
+			return []outbox.Tuple{{
+				User:     Parent{Type: p.ParentType, ID: p.ParentID}.Object(),
+				Relation: "auth_parent",
+				Object:   "organizational_unit:" + p.UnitID,
+			}}, nil
+		},
 	}
 }

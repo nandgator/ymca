@@ -248,25 +248,39 @@ func TestConfigurationChain_EndToEnd(t *testing.T) {
 
 	// Nothing has reached OpenFGA yet: these are grants, and 8.3 says grants
 	// may lag. That they lag is a property worth asserting, not assuming.
-	t.Run("grants are pending until the dispatcher runs", func(t *testing.T) {
-		var pending int
+	// Scoped to THIS test's aggregates, not counted over the whole table.
+	// The dispatcher drains authorization_outbox globally by design, so a
+	// table-wide count is really an assertion about what every other test
+	// left behind: it failed here at 7-want-5 because of two stray rows from
+	// a different package, and its message blamed the bundle, type and plan
+	// -- a guard's failure sending the reader the wrong way, which is R10's
+	// lesson about TestGrantableSetMatchesMigration in a second place.
+	pendingHere := func(t *testing.T) int {
+		t.Helper()
+		var n int
 		if err := pool.Pool().QueryRow(ctx, `
 			SELECT count(*) FROM authorization_outbox
-			 WHERE dispatched_at IS NULL AND voided_at IS NULL`).Scan(&pending); err != nil {
+			 WHERE aggregate_id = ANY($1::uuid[])
+			   AND dispatched_at IS NULL AND voided_at IS NULL`,
+			[]string{bundleID, typeID, planID}).Scan(&n); err != nil {
 			t.Fatalf("count pending: %v", err)
 		}
-		if pending != 5 {
-			t.Fatalf("%d pending outbox rows, want 5 (bundle, type, plan tenant edges, entitles, via_plan)", pending)
+		return n
+	}
+
+	t.Run("grants are pending until the dispatcher runs", func(t *testing.T) {
+		if n := pendingHere(t); n != 5 {
+			t.Fatalf("%d pending outbox rows for this test's aggregates, want 5 "+
+				"(bundle, type, plan tenant edges, entitles, via_plan)", n)
 		}
 	})
 
 	t.Run("the dispatcher projects every fact", func(t *testing.T) {
-		n, err := dispatcher.Once(ctx)
-		if err != nil {
+		if _, err := dispatcher.Once(ctx); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
-		if n != 5 {
-			t.Fatalf("dispatched %d rows, want 5", n)
+		if n := pendingHere(t); n != 0 {
+			t.Fatalf("%d of this test's facts are still pending after a dispatch, want 0", n)
 		}
 	})
 

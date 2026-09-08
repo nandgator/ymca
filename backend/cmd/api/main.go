@@ -145,6 +145,19 @@ func serve(logger *slog.Logger) error {
 	tenantRoute("GET /api/v1/t/{tenant}/consumption-types",
 		handleListConsumptionTypes(pool, fga, logger))
 
+	// A3.7 people and units. POST /units is the first endpoint that can
+	// insert an authorization_edge, which is what made migration 0005's
+	// invariants reachable at all (ADR-115) — before it, ADR-016's
+	// guarantee had no write path to hold against.
+	tenantRoute("POST /api/v1/t/{tenant}/people",
+		handleRegisterPerson(pool, fga, logger))
+	tenantRoute("POST /api/v1/t/{tenant}/units",
+		handleCreateUnit(pool, fga, logger))
+	tenantRoute("GET /api/v1/t/{tenant}/units/{unit}",
+		handleGetUnit(pool, fga, logger))
+	tenantRoute("GET /api/v1/t/{tenant}/units/{unit}/members",
+		handleListUnitMembers(pool, fga, logger))
+
 	handler := httpx.Chain(mux,
 		httpx.Recover(logger),
 		httpx.RequestID(),

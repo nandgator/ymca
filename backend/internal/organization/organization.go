@@ -27,14 +27,6 @@ import (
 // created together. Its renderer is in renderers.go.
 const EventTenantProvisioned = "TenantProvisioned"
 
-// ErrOwnerSubjectTaken is A3.4's invalid_request: the IdP subject offered
-// for the owner already identifies a principal. It names a value the caller
-// supplied, so echoing it discloses nothing they did not already send.
-var ErrOwnerSubjectTaken = errors.New("organization: owner idp_subject already identifies a principal")
-
-// uniqueViolation is the SQLSTATE for a unique or primary key collision.
-const uniqueViolation = "23505"
-
 // Owner is the first principal a tenant ever has.
 type Owner struct {
 	PersonID    string `json:"person_id"`

@@ -16,7 +16,6 @@
 package main
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
-	"github.com/nandgator/ymca/backend/internal/organization"
 	"github.com/nandgator/ymca/backend/internal/page"
 )
 
@@ -36,75 +34,10 @@ import (
 // sometimes constitutional artifact, and ADR-076 marks them
 // tenant-configurable, which is authority over the tenant rather than over
 // any one object.
-const configurePermission = "admin"
-
-// authorizeTenant runs 6.1 against the tenant named in the path and writes
-// A3.4's response on refusal. It reports whether the caller may proceed.
 //
-// A denial is 403 forbidden; ErrTenantMismatch cannot reach here, because
-// TenantMatch already ran on the route.
-func authorizeTenant(
-	w http.ResponseWriter, r *http.Request,
-	pool *db.DB, fga *authz.FGA, logger *slog.Logger, relation string,
-) bool {
-	tenantID := r.PathValue("tenant")
-	principal, ok := httpx.PrincipalFromContext(r.Context())
-	if !ok {
-		httpx.WriteError(w, httpx.CodeInternal, "no principal on request context")
-		return false
-	}
-
-	allowed, err := authz.Check(r.Context(), pool, fga, authz.Request{
-		Principal:       principal,
-		RequestTenantID: tenantID,
-		Object:          authz.Object{Type: "tenant", ID: tenantID, TenantID: tenantID},
-		Relation:        relation,
-		Action:          "tenant." + relation,
-		RequestID:       httpx.RequestIDFromContext(r.Context()),
-	})
-	if err != nil {
-		logger.ErrorContext(r.Context(), "authorization check failed",
-			"error", err, "relation", relation,
-			"request_id", httpx.RequestIDFromContext(r.Context()))
-		httpx.WriteError(w, httpx.CodeInternal, "authorization check failed")
-		return false
-	}
-	if !allowed {
-		httpx.WriteError(w, httpx.CodeForbidden, "not permitted")
-		return false
-	}
-	return true
-}
-
-// writeDomainError maps a domain error to A3.4's vocabulary. Anything not
-// recognised is a 500 with no detail: A3.4 forbids leaking SQL or an
-// identifier the caller could not already name.
-func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
-	switch {
-	case errors.Is(err, membership.ErrNotFound), errors.Is(err, consumption.ErrNotFound):
-		httpx.WriteError(w, httpx.CodeNotFound, "not found")
-	case errors.Is(err, page.ErrInvalidCursor), errors.Is(err, page.ErrInvalidLimit),
-		errors.Is(err, membership.ErrInvalidEntitledType),
-		errors.Is(err, organization.ErrOwnerSubjectTaken):
-		// A3.4: these name a value the caller supplied, so echoing it
-		// discloses nothing they did not already send.
-		httpx.WriteError(w, httpx.CodeInvalidRequest, err.Error())
-	default:
-		logger.ErrorContext(r.Context(), "request failed",
-			"error", err, "request_id", httpx.RequestIDFromContext(r.Context()))
-		httpx.WriteError(w, httpx.CodeInternal, "internal error")
-	}
-}
-
-// readBody decodes a request body, turning every failure into A3.4's
-// invalid_request. The message names the problem but never echoes the body.
-func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
-	if _, err := httpx.ReadJSON(r, v); err != nil {
-		httpx.WriteError(w, httpx.CodeInvalidRequest, "request body could not be read as JSON")
-		return false
-	}
-	return true
-}
+// The check itself, the error mapping and body decoding are in handlers.go,
+// shared with the organization endpoints.
+const configurePermission = "admin"
 
 func handleCreateBundle(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
