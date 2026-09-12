@@ -26,8 +26,9 @@ fga/sync_test.go           A1.8 rules 7-9, machine-checked
 fga/grantable_test.go      A1.8 rule 10 — the model vs every migration
 cmd/fga/                   applies the model, runs the assertions
 cmd/api/                   the HTTP server, /me, configuration, platform,
-                           people and units
-cmd/api/handlers.go        the 6.1 check, A3.4's error mapping, body decoding
+                           people, units and admission
+cmd/api/handlers.go        the 6.1 check, A3.4's error mapping, body decoding,
+                           and A3.6's flow around one operation
 internal/config/           environment configuration
 internal/db/               the pool, and the tenant transaction (8.2)
 internal/auth/             the ADR-106 port and its provider registry
@@ -40,6 +41,7 @@ internal/idempotency/      A3.6 — the key is stored with the work it describes
 internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/page/             A3.5 keyset pagination; the cursor is opaque
 internal/membership/       bundles, plans, and their outbox renderers
+internal/membership/admission.go ADR-107 — a member who may actually do something
 internal/membership/members.go   ADR-104's unit member list
 internal/identity/         people — global rows, tenant-gated (ADR-114)
 internal/consumption/      consumption types (05.10)
@@ -56,9 +58,9 @@ Dockerfile       not needed until there is something to deploy
 finance/                                     the rest of 8.3
 ```
 
-`membership/`, `consumption/`, `organization/` and `identity/` now exist.
-Admission, consumption records and the finance endpoints are still unwritten;
-see the handoff §8 for the order and what to read first.
+`membership/`, `consumption/`, `organization/` and `identity/` now exist, and
+admission with them. Consumption records and the finance endpoints are still
+unwritten; see the handoff §8 for the order and what to read first.
 
 ---
 
@@ -138,13 +140,15 @@ against the tenant named in the path — the endpoint reports no object-scoped
 permission, deliberately, because a `/me` that enumerated them would be the
 reverse index `ADR-104` and `8.11` exist to prevent. Beside it are A3.7's
 configuration endpoints (bundles, plans, consumption types), the
-people-and-units endpoints, and one platform-plane route.
+people, units and admission endpoints, and one platform-plane route.
 
 ```txt
 POST /api/v1/t/{t}/people               may_register_person   ADR-114
 POST /api/v1/t/{t}/units                admin on the NAMED PARENT
 GET  /api/v1/t/{t}/units/{unit}         member on the unit
 GET  /api/v1/t/{t}/units/{unit}/members member_read on the unit  ADR-104
+POST /api/v1/t/{t}/memberships          may_approve_membership   ADR-107
+                                        + Idempotency-Key, required
 ```
 
 `POST /units` writes the unit row and its `authorization_edge` in one
@@ -156,6 +160,48 @@ Creating two levels at once needs a dispatch between them. The new unit's
 `auth_parent` tuple is a grant, so it reaches OpenFGA when the dispatcher
 runs; until then a request to create a child beneath it is refused. That is
 `ADR-101`'s asymmetry, not a race.
+
+### Admission
+
+`POST /t/{t}/memberships` is the endpoint that makes a member able to do
+anything. It writes the membership row and three authorization facts:
+
+```txt
+tenant:<t>                tenant          membership:<m>
+person:<p>                holder          membership:<m>
+membership:<m>#covered    covered_member  membership_plan:<plan>
+```
+
+The third is `ADR-107`'s, and **getting it wrong is silent**: without it the
+member simply holds no entitlements, every `may_record` check denies —
+correctly — and nothing reports why. The `#covered` suffix is load-bearing,
+because what a plan covers is every person the membership covers, not the
+membership. All three are grants, so a member cannot record until the
+dispatcher has run.
+
+It is gated on `may_approve_membership`, **not** `admin`: `ADR-110` made that
+relation role-grantable so that a front desk can admit members without
+holding administration of the association.
+
+It is also the first endpoint requiring `Idempotency-Key` (`A3.6`, whose
+scope was widened for it). Admission creates neither money nor a consumption
+record and `UNIQUE (tenant_id, number)` already prevents a duplicate — what
+the key buys is an answer. Without it, a retry after a lost 201 returns
+`membership_number_taken` and the caller cannot tell its own success from
+somebody else's collision.
+
+Two collisions, two codes, both 409:
+
+```txt
+membership_number_taken  UNIQUE (tenant_id, number) — choose another
+already_active_member    one_active_membership_per_tenant (ADR-043) —
+                         one person, at most one live membership per tenant
+```
+
+The plan must be `OPEN`, read in the same statement that inserts the row.
+`valid_from` and `valid_until` are the caller's and are not derived from the
+plan's duration; `org_unit_id` may be NULL, which is an association-level
+membership and appears under no unit's member list (`ADR-104`).
 
 ### The two planes
 
@@ -286,10 +332,44 @@ dispatcher then puts it back. The record notes the first draft of this fix had
 only the row lock and was wrong; this is what stops the second draft being
 wrong the same way.
 
+`TestAdmission_EndToEnd` is the chain's payoff, and what it asserts is an
+ALLOW the same person did not have a moment earlier — not that three rows
+were enqueued:
+
+```txt
+a person with no membership may NOT record   the state before, asserted
+the three facts are pending until dispatch   ADR-101's asymmetry, not a race
+the admitted member MAY record               holder -> covered ->
+                                             covered_member -> via_plan ->
+                                             entitled
+a retry with the same key replays the 201    and there is ONE membership row
+the same key with a different body is 409
+a rolled-back attempt leaves nothing to replay
+a taken number and an existing membership answer with DIFFERENT codes
+a plan that is not OPEN is refused           seeded at the table; no
+                                             endpoint can close a plan (B8)
+an identifier that is not a uuid is 400, not 500
+a caller without may_approve_membership is refused, and writes no row
+```
+
 **Every one of these was drift-tested**, per the handoff's standing rule:
 deleting the term-window clause fails exactly the expired and not-yet-begun
 cases, deleting the clearance clause fails exactly the clearance case, and
 expiring `/me`'s role assignment drops the permission from the response.
+Admission's eight guards behave the same way — removing ADR-107's
+`covered_member` fact fails exactly the pending-count and `may_record` cases,
+and renaming one of the two collision constraints fails exactly one of the
+two 409s while the other stays green, which is session 6's constraint-name
+lesson in a second place.
+
+**One of them passed when it should have failed.** Removing the
+`Idempotency-Key` requirement left the whole suite green: the zero-valued key
+that resulted reached PostgreSQL as `''::uuid`, raised `22P02`, and came back
+as the same 400 the test was expecting. `runIdempotent` now refuses a zero key
+with a logged 500 — the honest answer for a server-side mistake — and the test
+asserts the message names the header. A check that has only ever been observed
+to pass is indistinguishable from one that cannot fail, in the small as well
+as the large.
 
 ---
 
@@ -359,7 +439,13 @@ Verified against the running cluster: a `ymca_api` connection with
 There is none outstanding. Everything this directory does that the record did
 not originally say has been written into it (`8.2`, `8.5`, `ADR-106`,
 `ADR-107`, `ADR-108`, `ADR-115`, `A1.1`, `A1.6`, `A1.7`, `A1.8` rule 7,
-`A2.1`, `A2.2`, `A3.2`, `A3.4`, `A3.7`, `A3.9`, `05.1.3`, `11.2`, `12`).
+`A2.1`, `A2.2`, `A3.2`, `A3.4`, `A3.6`, `A3.7`, `A3.9`, `05.1.3`, `11.2`,
+`12`).
+
+`A3.6` is this round's: its scope sentence said "money or a consumption
+record", admission is neither, and the endpoint requires the header anyway —
+so the sentence changed rather than the code doing more than the record
+describes.
 
 What remains is formatting, and it is checked rather than promised:
 
@@ -473,9 +559,22 @@ Recorded in `A2.1` and `11.2`, not worked around here:
   two conventions can coexist in one tenant.
 - **Nothing sweeps `idempotency_key`.** The index for it exists; the sweep
   does not. Keys accumulate until something removes them.
-- **The renderer registry is empty.** `outboxRenderers()` in `cmd/api` gains
-  an entry per domain event in 8.3. Until then the dispatcher runs and finds
-  nothing, which is correct — no domain event is published yet.
+- **Nothing revokes a membership's tuples.** `08` lists "membership
+  suspended / lapsed / terminated" among the operations requiring synchronous
+  revocation, and no endpoint changes a membership's state — so coverage
+  granted at admission outlives the membership that justified it.
+- **Admission derives no term from the plan.** `valid_from` and `valid_until`
+  are passed through, so a `LIFETIME` plan accepts a membership carrying an
+  end date. Deriving one is plan-lifecycle logic no ADR specifies.
+- **The application workflow is bypassed.** 05.3.4's DRAFT→ADMITTED state
+  machine has no endpoint; admission inserts a membership directly and
+  `membership.application_id` is always NULL.
+- **Dependents are unreachable.** `membership_dependent`,
+  `plan.max_dependents` and A1.2's `membership.dependent` all exist; nothing
+  adds a dependent, so `covered` resolves to the holder alone.
+- **Admission authority is tenant-scoped only.** 05.3.4 puts approval at "the
+  tenant or an org unit above the application"; A1.2 declares no admission
+  relation on `organizational_unit`, so only the tenant half is checkable.
 - **`invalid_request` had no code until now.** A3.4 listed no status for a
   malformed request at all; a bad cursor, an out-of-range limit and an
   unreadable body had nowhere to go. Added as 400.
