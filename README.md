@@ -137,3 +137,9 @@ docs/system-design/   the architecture description — read this first
 prototype/            archived YMCA Mess Management prototype (Go + KMP)
 README.md             this file
 ```
+
+## AI
+
+Built with AI.
+Overseen by Human.
+Purpose: Primarily educational with production potential.
