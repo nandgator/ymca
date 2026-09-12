@@ -106,8 +106,17 @@ The codes every endpoint may emit, and their status:
 403  forbidden          the check of 6.1 denied
 404  not_found          absent, or the caller may not know it exists (A3.3)
 409  idempotency_key_reused  same key, different request body (A3.6)
+409  membership_number_taken the number is another membership's (A3.7)
+409  already_active_member   that person is already a member here (A3.7)
 500  internal           anything the caller cannot act on
 ```
+
+**Admission's two collisions are two codes, not one `conflict`.** The message
+is for a developer, so a client must not parse it — and the two call for
+different behaviour: a taken number means choose another, while an existing
+active membership means the membership already exists and is the thing to
+show. Collapsing them would put that distinction somewhere no client may read
+it.
 
 `invalid_request` covers a body that is not the JSON the endpoint documents, a
 `limit` outside its range, and a `cursor` that does not decode. It is the one
@@ -166,12 +175,22 @@ clients must not construct or parse one.
 Idempotency-Key: <client-generated>
 ```
 
-Required on every POST that creates money or a consumption record. The key is
-stored with the result; a repeat returns the original response rather than
-creating a second row.
+Required on every POST that creates money or a consumption record, and on
+admission. The key is stored with the result; a repeat returns the original
+response rather than creating a second row.
 
 A warden on hostel wifi will retry. Without this, a retried meal is a second
 meal and a retried payment is a second payment.
+
+**Admission is here for the same reason, not by category.** It creates
+neither money nor a consumption record, and `UNIQUE (tenant_id, number)`
+already prevents a second membership — so the mechanism buys no protection
+against duplicate state. What it buys is an answer: without a key, a retry
+after a lost 201 gets `membership_number_taken`, and the caller cannot tell
+its own earlier success from somebody else's collision. With one it gets the
+original 201 and the membership id. The scope was widened when 8.3 built the
+endpoint and found that out, rather than the endpoint quietly requiring a
+header this section did not ask for.
 
 The key is stored in `idempotency_key` (A2.10) **inside the transaction that
 does the work**, so the effect and the record of it commit together.
@@ -426,6 +445,58 @@ such rule, so that machinery would buy contention for nothing. It also keeps
 each association's own numbering convention intact — the same reasoning that
 settled ADR-107 — and leaves historical numbers importable without a special
 case when B5 arrives.
+
+### What admission does
+
+```txt
+POST /t/{t}/memberships
+Idempotency-Key: <client-generated>          required (A3.6)
+{ person_id, plan_id, number, org_unit_id?, valid_from?, valid_until? }
+    -> 201 { id, person_id, plan_id, org_unit_id, number, state,
+             admitted_at, valid_from, valid_until }
+```
+
+Gated on `tenant:may_approve_membership`, not on `tenant:admin`. ADR-110 made
+that relation role-grantable precisely so a front desk can admit members
+without holding administration of the association (05.3.4). The unit-scoped
+half of 05.3.4's authority — "the tenant or an org unit above the
+application" — is not checked, because A1.2 declares no admission relation on
+`organizational_unit` to check against. Open, 11.2.
+
+**The person already exists.** `POST /t/{t}/people` creates the global row
+under `may_register_person` (ADR-114); admission takes a `person_id`. A
+`person_id` or `org_unit_id` that does not resolve is 404, which A3.3 makes
+indistinguishable from one the caller may not know about.
+
+**The plan must be OPEN.** 05.3.2 calls `CLOSED_TO_NEW` the common real state
+— existing life members keep a plan that no longer accepts applicants — and
+`DRAFT` is a plan not yet live. Admitting onto either is `invalid_request`.
+The plan's status is read in the same statement that inserts the membership,
+so a plan closing between the two cannot be raced.
+
+**The term is the caller's, and nothing derives it.** `valid_from` and
+`valid_until` are passed through unvalidated against `plan.duration`, for the
+same reason the number is supplied: an association's own convention survives,
+and B5 imports historical memberships without a special case. The
+consequence, that a `LIFETIME` plan will accept a membership carrying an end
+date, is open in 11.2 rather than closed by a derivation this document does
+not specify.
+
+**Three authorization facts, through the outbox.** All three are grants, so
+they may lag a dispatch interval (8.3) and a member cannot record until the
+dispatcher has run:
+
+```txt
+tenant:<t>                    tenant          membership:<m>
+person:<p>                    holder          membership:<m>
+membership:<m>#covered        covered_member  membership_plan:<plan>
+```
+
+The third is ADR-107's, and the `#covered` suffix is the load-bearing part:
+the user is the membership's covered USERSET, because what the plan covers is
+every person the membership covers. They are three separate facts rather than
+one because each is separately revocable — a suspension lifts coverage while
+the membership and its holder remain (08's synchronous revocation list).
 
 **Recording for another person is not a different endpoint.** It is the same
 `POST .../records` with a different subject, gated by `may_record_for_other`
