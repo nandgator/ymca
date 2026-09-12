@@ -9,14 +9,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nandgator/ymca/backend/internal/authz"
 	"github.com/nandgator/ymca/backend/internal/consumption"
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
+	"github.com/nandgator/ymca/backend/internal/idempotency"
 	"github.com/nandgator/ymca/backend/internal/membership"
 	"github.com/nandgator/ymca/backend/internal/organization"
 	"github.com/nandgator/ymca/backend/internal/page"
@@ -102,6 +109,82 @@ func authorizeUnit(
 	}, relation)
 }
 
+// runIdempotent is A3.6's flow around one operation: look the key up,
+// otherwise do the work and record the key in the SAME transaction, so that
+// the effect and the record of it commit together.
+//
+// status is the code a fresh success returns; a replay returns whatever was
+// stored, which is normally the same number and is read from the row rather
+// than assumed.
+//
+// Two attempts, not a loop. The only retryable failure is ErrConcurrent,
+// which means an identical request won the primary key while this one ran —
+// so the winner is committed and the second attempt's Lookup finds it. A
+// third attempt could learn nothing the second did not. Two ErrConcurrents in
+// a row falls through to writeDomainError, which has no case for it and so
+// logs and answers 500: an honest answer to something that should not happen.
+func runIdempotent(
+	w http.ResponseWriter, r *http.Request, pool *db.DB, logger *slog.Logger,
+	key idempotency.Key, status int, op func(context.Context, pgx.Tx) (any, error),
+) {
+	// A zero key is a programming error in the caller of this function, not
+	// a caller of the API, and it must not be allowed to look like one. Its
+	// empty tenant reaches PostgreSQL as ''::uuid, which raises 22P02 — the
+	// SQLSTATE writeDomainError reads as a malformed identifier — so without
+	// this a handler that ignored the error from httpx.IdempotencyKey would
+	// answer 400 and blame the client for the server's mistake. Found by
+	// removing the key requirement on purpose and watching the suite stay
+	// green.
+	if key.Key == "" || key.TenantID == "" {
+		logger.ErrorContext(r.Context(), "idempotency key not built",
+			"endpoint", key.Endpoint, "request_id", httpx.RequestIDFromContext(r.Context()))
+		httpx.WriteError(w, httpx.CodeInternal, "internal error")
+		return
+	}
+
+	tenantID := r.PathValue("tenant")
+	for attempt := 0; attempt < 2; attempt++ {
+		var result idempotency.Result
+		err := pool.InTenantTx(r.Context(), tenantID, func(tx pgx.Tx) error {
+			stored, found, err := idempotency.Lookup(r.Context(), tx, key)
+			if err != nil {
+				return err
+			}
+			if found {
+				result = stored
+				return nil
+			}
+			result, err = idempotency.Do(r.Context(), tx, key,
+				func(ctx context.Context, tx pgx.Tx) (idempotency.Result, error) {
+					value, opErr := op(ctx, tx)
+					if opErr != nil {
+						return idempotency.Result{}, opErr
+					}
+					// The stored body is what the caller will be sent on a
+					// replay, so it is encoded here rather than by the
+					// handler — one encoding, one thing to be equal to.
+					body, encErr := json.Marshal(value)
+					if encErr != nil {
+						return idempotency.Result{}, fmt.Errorf("api: encode response: %w", encErr)
+					}
+					return idempotency.Result{StatusCode: status, Body: body}, nil
+				})
+			return err
+		})
+		if errors.Is(err, idempotency.ErrConcurrent) && attempt == 0 {
+			continue
+		}
+		if err != nil {
+			// A3.6: a failed attempt rolled back, key row included, so
+			// there is nothing to replay and a retry starts fresh.
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		httpx.WriteStored(w, result.StatusCode, result.Body)
+		return
+	}
+}
+
 // writeDomainError maps a domain error to A3.4's vocabulary. Anything not
 // recognised is a 500 with no detail: A3.4 forbids leaking SQL or an
 // identifier the caller could not already name.
@@ -118,6 +201,8 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		httpx.WriteError(w, httpx.CodeNotFound, "not found")
 	case errors.Is(err, page.ErrInvalidCursor), errors.Is(err, page.ErrInvalidLimit),
 		errors.Is(err, membership.ErrInvalidEntitledType),
+		errors.Is(err, membership.ErrPlanNotOpen),
+		errors.Is(err, httpx.ErrMissingIdempotencyKey),
 		errors.Is(err, organization.ErrOwnerSubjectTaken),
 		errors.Is(err, organization.ErrInvalidUnitType),
 		errors.Is(err, organization.ErrInvalidParentType):
@@ -129,7 +214,27 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		// caller chose the parent, so the refusal is about their request.
 		// D7 has no `conflict` code outside A3.6's idempotency case.
 		httpx.WriteError(w, httpx.CodeInvalidRequest, err.Error())
+	case errors.Is(err, idempotency.ErrKeyReused):
+		// A3.6's one refusal: the same key with a different body. Replaying
+		// the first response would silently discard the second request.
+		httpx.WriteError(w, httpx.CodeIdempotencyKeyReused,
+			"that idempotency key was used for a different request")
+	case errors.Is(err, membership.ErrNumberTaken):
+		httpx.WriteError(w, httpx.CodeMembershipNumberTaken, err.Error())
+	case errors.Is(err, membership.ErrAlreadyActiveMember):
+		httpx.WriteError(w, httpx.CodeAlreadyActiveMember, err.Error())
 	default:
+		// 22P02 is invalid_text_representation: a value the caller sent did
+		// not parse as the type its column has, which in this API is always
+		// a malformed uuid in a body or a path. Answering 500 would blame
+		// the server for the caller's typo. The message names the shape and
+		// never echoes the value.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+			httpx.WriteError(w, httpx.CodeInvalidRequest,
+				"an identifier in the request is not a well-formed uuid")
+			return
+		}
 		logger.ErrorContext(r.Context(), "request failed",
 			"error", err, "request_id", httpx.RequestIDFromContext(r.Context()))
 		httpx.WriteError(w, httpx.CodeInternal, "internal error")

@@ -18,21 +18,31 @@ const (
 	// different body. Replaying the first response would silently discard
 	// the second request, which is that header's own failure mode inverted.
 	CodeIdempotencyKeyReused Code = "idempotency_key_reused"
-	CodeInternal             Code = "internal"
+	// CodeMembershipNumberTaken and CodeAlreadyActiveMember are admission's
+	// two 409s (A3.7). They are separate codes rather than one `conflict`
+	// because A3.4 writes the message for a developer — a client must not
+	// parse it — and the two call for different client behaviour: choose
+	// another number, versus this person is already a member and the
+	// existing membership is the thing to show.
+	CodeMembershipNumberTaken Code = "membership_number_taken"
+	CodeAlreadyActiveMember   Code = "already_active_member"
+	CodeInternal              Code = "internal"
 )
 
 // httpStatus is D7's HTTP status for each code. tenant_mismatch and
 // forbidden are both 403 — ADR-105: refusing a tenant the caller named
 // themselves discloses nothing, so it does not fall back to 401.
 var httpStatus = map[Code]int{
-	CodeInvalidRequest:       http.StatusBadRequest,
-	CodeUnauthenticated:      http.StatusUnauthorized,
-	CodeTokenExpired:         http.StatusUnauthorized,
-	CodeTenantMismatch:       http.StatusForbidden,
-	CodeForbidden:            http.StatusForbidden,
-	CodeNotFound:             http.StatusNotFound,
-	CodeIdempotencyKeyReused: http.StatusConflict,
-	CodeInternal:             http.StatusInternalServerError,
+	CodeInvalidRequest:        http.StatusBadRequest,
+	CodeUnauthenticated:       http.StatusUnauthorized,
+	CodeTokenExpired:          http.StatusUnauthorized,
+	CodeTenantMismatch:        http.StatusForbidden,
+	CodeForbidden:             http.StatusForbidden,
+	CodeNotFound:              http.StatusNotFound,
+	CodeIdempotencyKeyReused:  http.StatusConflict,
+	CodeMembershipNumberTaken: http.StatusConflict,
+	CodeAlreadyActiveMember:   http.StatusConflict,
+	CodeInternal:              http.StatusInternalServerError,
 }
 
 type errorBody struct {

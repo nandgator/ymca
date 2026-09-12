@@ -18,7 +18,55 @@ func Renderers() map[string]outbox.Renderer {
 	return map[string]outbox.Renderer{
 		EventBundleCreated:           tenantEdge("bundle_id", "entitlement_bundle"),
 		EventPlanCreated:             tenantEdge("plan_id", "membership_plan"),
+		EventMembershipAdmitted:      tenantEdge("membership_id", "membership"),
 		consumption.EventTypeCreated: tenantEdge("type_id", "consumption_type"),
+
+		EventMembershipHeldBy: func(payload json.RawMessage) ([]outbox.Tuple, error) {
+			var p struct {
+				MembershipID string `json:"membership_id"`
+				PersonID     string `json:"person_id"`
+			}
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return nil, err
+			}
+			if p.MembershipID == "" || p.PersonID == "" {
+				return nil, fmt.Errorf("renderer: %s payload lacks membership_id or person_id",
+					EventMembershipHeldBy)
+			}
+			// A1.2: `covered: holder or dependent`. This is the holder half,
+			// and it is what makes the userset in the next tuple resolve to
+			// a person at all.
+			return []outbox.Tuple{{
+				User:     "person:" + p.PersonID,
+				Relation: "holder",
+				Object:   "membership:" + p.MembershipID,
+			}}, nil
+		},
+
+		EventMembershipCovered: func(payload json.RawMessage) ([]outbox.Tuple, error) {
+			var p struct {
+				MembershipID string `json:"membership_id"`
+				PlanID       string `json:"plan_id"`
+			}
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return nil, err
+			}
+			if p.MembershipID == "" || p.PlanID == "" {
+				return nil, fmt.Errorf("renderer: %s payload lacks membership_id or plan_id",
+					EventMembershipCovered)
+			}
+			// ADR-107, and the `#covered` suffix is load-bearing: the user
+			// is the membership's COVERED USERSET, not the membership. A1.2
+			// declares `covered_member: [membership#covered]`, so the bare
+			// membership is a type violation — and the difference in meaning
+			// is the whole point, since what the plan covers is every person
+			// the membership covers.
+			return []outbox.Tuple{{
+				User:     "membership:" + p.MembershipID + "#covered",
+				Relation: "covered_member",
+				Object:   "membership_plan:" + p.PlanID,
+			}}, nil
+		},
 
 		EventBundleEntitles: func(payload json.RawMessage) ([]outbox.Tuple, error) {
 			var p struct {

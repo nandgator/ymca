@@ -158,6 +158,13 @@ func serve(logger *slog.Logger) error {
 	tenantRoute("GET /api/v1/t/{tenant}/units/{unit}/members",
 		handleListUnitMembers(pool, fga, logger))
 
+	// Admission. The first endpoint that requires an Idempotency-Key
+	// (A3.6), and the one that writes ADR-107's covered_member tuple —
+	// without which a member holds no entitlements and every may_record
+	// check denies, correctly and silently.
+	tenantRoute("POST /api/v1/t/{tenant}/memberships",
+		handleAdmitMember(pool, fga, logger))
+
 	handler := httpx.Chain(mux,
 		httpx.Recover(logger),
 		httpx.RequestID(),

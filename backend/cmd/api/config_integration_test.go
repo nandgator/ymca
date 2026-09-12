@@ -285,10 +285,12 @@ func TestConfigurationChain_EndToEnd(t *testing.T) {
 	})
 
 	// ── The payoff ────────────────────────────────────────────────────
-	// A membership on the plan, and the ADR-107 tuple admission will write.
-	// Written directly here because admission is the next commit; what this
-	// test proves is that the CONFIGURATION the chain built is what makes
-	// that tuple mean something.
+	// A membership on the plan, and the ADR-107 tuple admission writes.
+	// Written directly here, and kept that way now that admission exists:
+	// this test's claim is that the CONFIGURATION the chain built is what
+	// makes that tuple mean something, and going through the admission
+	// endpoint would make the claim depend on the endpoint's own
+	// correctness. TestAdmission_EndToEnd covers that, through the API.
 	t.Run("a member on the plan may record", func(t *testing.T) {
 		if err := pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `
