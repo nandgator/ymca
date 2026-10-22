@@ -108,6 +108,19 @@ The codes every endpoint may emit, and their status:
 409  idempotency_key_reused  same key, different request body (A3.6)
 409  membership_number_taken the number is another membership's (A3.7)
 409  already_active_member   that person is already a member here (A3.7)
+409  already_recorded        a live record exists for that person, type, day (A3.10)
+409  record_already_corrected the record already has a correction (A3.10)
+409  consumption_window_closed the correction window has closed (A3.10)
+409  period_closed           the day lies in a period already closed (A3.10)
+409  period_already_closed   that period overlaps one already closed (A3.10)
+409  obligation_overlaps     an obligation of that type already covers those days
+409  rate_overlaps           a rate already covers those days (A3.11)
+409  no_rate                 obligated units but no rate in force (A3.11)
+409  currency_mismatch       two currencies where one is required (A3.11)
+409  invoice_wrong_state     the invoice is not in the state this needs
+409  invoice_empty           nothing to issue
+409  payment_exceeds_balance more than is owed
+422  record_mode_not_allowed the type does not take this kind of recording
 500  internal           anything the caller cannot act on
 ```
 
@@ -248,16 +261,21 @@ IDENTITY AND MEMBERSHIP
   GET    /t/{t}/units/{unit}/members               list  — scope: unit
   POST   /t/{t}/memberships                        admit a member
 
-CONSUMPTION
+CONSUMPTION                                        (detail: A3.10)
   POST   /t/{t}/consumption-types                  define a type
   GET    /t/{t}/consumption-types
+  POST   /t/{t}/consumption-types/{ct}/options     define an option
+  GET    /t/{t}/consumption-types/{ct}/options
+  POST   /t/{t}/consumption-types/{ct}/obligations obligate a member
   POST   /t/{t}/consumption-types/{ct}/records     record use
   POST   /t/{t}/consumption-records/{r}/correction supersede  (ADR-098)
   GET    /t/{t}/consumption-types/{ct}/records     list  — scope: type
   POST   /t/{t}/absences                           declare an absence
+  POST   /t/{t}/absences/{a}/withdraw
   POST   /t/{t}/consumption-types/{ct}/close       close a period
 
-FINANCE
+FINANCE                                            (detail: A3.11)
+  POST   /t/{t}/consumption-types/{ct}/rates       price a unit
   GET    /t/{t}/invoices                           list  — scope: tenant
   GET    /t/{t}/invoices/{inv}
   POST   /t/{t}/invoices/{inv}/issue                allocate number (ADR-103)
@@ -505,6 +523,352 @@ authorization wrong.
 
 ---
 
+## A3.10 Consumption
+
+Built in 8.3 from 05.10. Everything below was found by building it, not by
+reading 05.10; each item says what 05.10 left open.
+
+```txt
+POST /t/{t}/consumption-types/{ct}/options          check: manager on the type
+GET  /t/{t}/consumption-types/{ct}/options
+POST /t/{t}/consumption-types/{ct}/obligations      check: manager on the type
+POST /t/{t}/consumption-types/{ct}/records          Idempotency-Key
+POST /t/{t}/consumption-records/{r}/correction      Idempotency-Key
+GET  /t/{t}/consumption-types/{ct}/records          check: may_read on the type
+POST /t/{t}/absences
+POST /t/{t}/absences/{a}/withdraw
+POST /t/{t}/consumption-types/{ct}/close            Idempotency-Key
+```
+
+### The tenant's admin manages every type in it
+
+`consumption_type.manager` gained `admin from tenant` (A1.2). Before this the
+owner of a new tenant could define a type and never again do anything to it:
+`manager` resolved only through an `auth_parent` the API never writes, and no
+endpoint creates a role assignment, so nothing could grant `may_close_period`
+or `may_record_for_other` either. `may_correct_late` joined the type with the
+same shape, because 05.10.7 requires it and A1.2 declared no such relation.
+
+### Recording
+
+```txt
+POST /t/{t}/consumption-types/{ct}/records
+Idempotency-Key: <client-generated>                       required (A3.6)
+{ "subject_person_id": ...,        optional; default = the caller's person
+  "occurred_on": "2026-10-04",     required; not in the future
+  "variant_code": "NONVEG",        optional
+  "option_codes": ["EGG"] }        optional
+    -> 201 { id, consumption_type_id, subject_person_id, actor_person_id,
+             occurred_on, obligation_id, variant_code, option_codes,
+             supersedes_id, voided, recorded_at }
+```
+
+Recording for oneself is checked as `may_record`, **for the caller's person
+and for the caller's principal, either sufficing**. Entitlement is a
+property of a `person` (a membership covers a human, ADR-107) while
+`manager` is a property of a `principal`, so a single-subject check would
+deny either the member or the owner. The two are asked of the graph together
+and a DENY is audited only if both refuse. Recording for another person is
+`may_record_for_other`, principal only.
+
+**The subject must be entitled, too.** `person` is global (A2.1), so
+`may_record_for_other` alone would let any tenant's staff bill any person in
+the instance. The subject is checked as `person:<subject> may_record` on the
+same type; an unentitled subject is `forbidden`. This is the DOMAIN half of
+05.10.9's split applied to the person recorded about, not only the person
+recording.
+
+`record_mode` (05.10.3) is enforced here and is `record_mode_not_allowed`
+(422) when violated: `SELF` refuses a subject other than the actor, `STAFF`
+refuses the actor as subject, `EITHER` allows both. Authorization decides
+whether the caller may; `record_mode` decides whether this type takes it.
+
+The remaining refusals:
+
+```txt
+type does not exist / not ACTIVE        404 / invalid_request
+subject_person_id does not exist        404
+occurred_on in the future               invalid_request
+an option_code unknown or WITHDRAWN     invalid_request
+a live record exists for that day       409 already_recorded
+the day is inside a closed period       409 period_closed
+```
+
+`already_recorded` is the partial unique index of A2.9; the constraint name
+is a contract with Go, as migration 0005's are. The client's recourse is a
+correction, not a second record.
+
+`obligation_id` is set when the subject has an obligation of this type
+covering `occurred_on`, so a record discharges the obligation without the
+caller naming it. **A late first record is not a correction**: 05.10.7's
+window bounds corrections, and a record for a day nobody recorded is a first
+fact. It is still refused inside a closed period, because that period has
+already been handed to Finance.
+
+**Variants carry no price.** 05.10.5 distinguishes a variant (modifies the
+obligated unit, may carry a surcharge) from an option (an addition), but A2.9
+holds a catalogue of options only. `variant_code` is stored as given and
+reported at close; a variant surcharge is expressed as an option with the
+same code. A variant catalogue is 11.2's.
+
+### Options and obligations
+
+```txt
+POST .../options      { code, name, charge_kind, amount, currency }   -> 201
+GET  .../options
+POST .../obligations  { subject_person_id, membership_id,
+                        effective_from, effective_until? }            -> 201
+```
+
+A2.9 defined both tables and A3.7 no way to fill them, so the hostel's
+dinner could never be an obligation and the egg never an option. An
+obligation is created from a **membership** (`source_type = MEMBERSHIP`,
+`source_id = membership_id`), which must belong to the tenant and be held by
+the named person; `STAY` and `SUBSCRIPTION` sources have no endpoint. It
+requires `obligates = true` on the type. Two obligations of one type for one
+person may not overlap (`obligation_overlaps`, 409 — A2.9's exclusion).
+
+### Dates are UTC midnights
+
+Every `date` in this section is a calendar day, and the `tstzrange` columns
+store `[from 00:00 UTC, until+1 00:00 UTC)`. A tenant time zone is not
+modelled (11.2), so a late-evening meal in another zone is the tenant's own
+`occurred_on` to state, which is why `occurred_on` is a date the caller
+supplies and never a timestamp the server derives. API ranges are **inclusive**
+at both ends (`"from": "2026-10-01", "to": "2026-10-31"`).
+
+### Corrections
+
+```txt
+POST /t/{t}/consumption-records/{r}/correction
+Idempotency-Key: <client-generated>                       required
+{ "void": true }                                   or
+{ "variant_code": ..., "option_codes": [...] }
+    -> 201, the new record (supersedes_id = {r})
+```
+
+Check: `may_correct` on the record's type. A correction keeps the superseded
+record's subject, type and day; moving a record to another day is a void
+plus a new record. **`void` is a correction that says no consumption
+occurred** (A2.9 gained `consumption_record.voided`, migration 0006): without
+it a mistaken record could only be changed, never taken back, and ADR-098
+forbids deleting it. A voided head counts as nothing at close and is hidden
+from the default list.
+
+```txt
+r is not the live head of its chain      409 record_already_corrected
+r's day is inside a closed period        409 period_closed
+r is older than correction_window        needs may_correct_late, else
+                                         409 consumption_window_closed
+```
+
+A record may be superseded **once** (A2.9's index covers originals only;
+migration 0006 adds the other half), so two simultaneous corrections cannot
+fork the chain. The window is `occurred_on + correction_window < now()`,
+null meaning unbounded (05.10.7); a successful late correction writes an
+`audit_event` at severity `NOTABLE`.
+
+Self-correction is not offered: `may_correct` is staff authority, so a
+resident who mis-tapped needs the warden. Open, 11.2.
+
+### Listing
+
+`GET .../consumption-types/{ct}/records?subject=&from=&to=&history=` pages
+by `(occurred_on desc, id)` (A3.5), checks `may_read` on the type once
+(ADR-104), and returns **live heads only** — neither superseded nor voided —
+unless `history=true`.
+
+### Expected absence
+
+```txt
+POST /t/{t}/absences
+{ "subject_person_id": ..., "from": "2026-10-10", "to": "2026-10-20" }
+    -> 201 { id, subject_person_id, period_from, period_to,
+             relieves_recording, relieves_payment, declared_by_person_id }
+POST /t/{t}/absences/{a}/withdraw        -> 200
+```
+
+Declaring for oneself needs **an ACTIVE membership held by the caller's
+person in this tenant**, read from PostgreSQL. This is the one handler in the
+slice that does not run a 6.1 graph check first: an absence is not per type,
+no relation on the tenant means "may declare my own absence", and adding one
+to A1.2 for a fact PostgreSQL already holds would write a tuple per member
+for no gain. Declaring for another person needs `tenant:admin`; a finer
+relation is 11.2's.
+
+`relieves_recording` is always true. `relieves_payment` is true when the
+period is **seven days or longer** — the reference tenant's threshold, the
+platform default until 05.7's policy engine exists to carry
+`ABSENCE_PAYMENT_RELIEF` per tenant. Both flags are snapshotted onto the row
+(ADR-099), so changing the default later rebills nothing. `decision_record_id`
+is always null (self-declared). Withdrawal sets `withdrawn_at`; only the
+declarer or a tenant admin may withdraw. Overlapping absences are allowed —
+relief is a union.
+
+### Closing a period
+
+```txt
+POST /t/{t}/consumption-types/{ct}/close
+Idempotency-Key: <client-generated>                       required
+{ "from": "2026-10-01", "to": "2026-10-31" }
+    -> 201 { closed: [ { id, subject_person_id, obligated_units,
+                         summary, invoice_id | null } ] }
+```
+
+Check: `may_close_period` on the type. For every person with an obligation
+overlapping the period or a live record inside it, one row of
+`consumption_period_close` is written (migration 0006) and Finance composes
+its charge (A3.11) **in the same transaction**. All or nothing: one person
+with no rate rolls back the whole close.
+
+**Exactly-once per person-period is an exclusion constraint** (05.10.12's
+open item): a second close overlapping an existing one raises 23P01 and is
+`409 period_already_closed`. No ordering of concurrent requests can defeat
+it, and an idempotency key alone could not — two different keys are two
+different requests. Recording and closing both take
+`pg_advisory_xact_lock` on `(type, subject)`, so a record committing while
+its person is being closed is either counted or refused, never lost.
+
+`obligated_units` for a person, from the obligation's `effective` ∩ the
+period, with days relieved by a payment-relieving, un-withdrawn absence
+removed (05.10.4):
+
+```txt
+DAILY            unrelieved days
+WEEKLY           ISO weeks containing at least one unrelieved day
+PER_OCCURRENCE   live records in the period (nothing is standing)
+```
+
+A non-obligating type has no obligated units; its charge is options only.
+`summary` is the published `ConsumptionPeriodClosed` (05.10.8): units,
+relieved units, variant counts and option counts with the catalogue price at
+close. **There is no event bus (B6):** the handoff is a direct call from the
+handler into Finance within the transaction, and the handler is the only
+place the two contexts meet. Consumption never imports Finance.
+
+Option prices are the live catalogue price at close; 05.10.12's price
+versioning remains open.
+
+---
+
+## A3.11 Finance
+
+```txt
+POST /t/{t}/consumption-types/{ct}/rates         check: finance_manager
+GET  /t/{t}/invoices                             check: finance_reader  (scope)
+GET  /t/{t}/invoices/{inv}                       check: viewer
+POST /t/{t}/invoices/{inv}/issue                 check: finance_manager, Idempotency-Key
+POST /t/{t}/invoices/{inv}/payments              check: finance_manager, Idempotency-Key
+```
+
+Invoices are **not created by an endpoint**. A3.7 listed list/get/issue/pay
+and nothing that makes one, and 05.8 says Finance composes from what other
+contexts publish; the only publisher in the slice is period close. That is
+now the sole way an invoice begins, which is the K8 story (entry to bill)
+rather than an omission.
+
+### `tenant.finance_manager`
+
+A1.2 had `finance_reader` and nothing that writes. `finance_manager` is its
+write side — rates, issue, payments — role-grantable (ADR-110: A1.2, the
+`grantable_permission` seed in 0006, and an assertion), and reachable by
+`admin`. It joins `/me`'s candidates, which are now **six** (A3.9).
+
+### Rates
+
+```txt
+POST .../rates   { amount, currency, from, to? }   -> 201
+```
+
+Finance prices a unit of consumption (05.10.8: "pricing and tax are
+Finance's"), and nothing stored a price until `consumption_rate` (0006). One
+rate per type per day (`rate_overlaps`, 409). Close reads the rate in force
+on the period's first day; a rate that changes mid-period does not split the
+period (11.2). A type with obligated units and no rate in force is
+`409 no_rate`, not a silent zero: an unpriced close would mark the period
+closed and bill nothing, and the exclusion constraint would then forbid
+closing it again.
+
+### What close composes
+
+Per closed person, Finance finds that payer's open `DRAFT` invoice in the
+charge's currency or starts one, then adds one `charge`
+(`source_type = CONSUMPTION`, `source_id = the close row`, ADR-100) with:
+
+```txt
+USAGE_FEE   ONE_TIME   obligated_units × rate        (when > 0)
+<kind>      ONE_TIME   count × option amount, per option used
+```
+
+No flat board fee and no `DISCOUNT` line, unlike 05.10.8's example: that
+example assumed a subscription fee, and the hostel's bill is per unit, so
+relief shows as fewer units rather than a negative. A person with nothing to
+bill gets no charge and `invoice_id: null`. Tax is unbuilt, so `TAX`
+components and `tax_snapshot` are absent (11.2). Mixed currencies within one
+close are `409 currency_mismatch`.
+
+The invoice's payer is the person's **party** (a `PERSON` party is created on
+first need) and the payee the tenant's `ORGANIZATION` party. Creating a draft
+publishes `tenant:<t> tenant invoice:<i>` and `person:<p> payer invoice:<i>`
+through the outbox, fenced like every grant (ADR-101).
+
+### Issue — ADR-103
+
+```txt
+POST .../invoices/{inv}/issue   { "due_at": "2026-11-15T00:00:00Z" }   optional
+    -> 200 the invoice, with number, issued_at, due_at, total_amount
+```
+
+`DRAFT` only (`invoice_wrong_state`, 409) and at least one component
+(`invoice_empty`, 409). The number is `INV/<financial year>/<value, six
+digits>`, drawn from `invoice_number_series` by `UPDATE ... SET next_value =
+next_value + 1 RETURNING next_value - 1` **as the last write before the
+invoice row is updated**, in the transaction that issues the invoice, so a
+rollback returns the number. The invoice row is locked first, so two issues
+of one invoice serialise on it and the loser sees `ISSUED`. The financial
+year starts in April for every tenant; a tenant-configurable year is 11.2's.
+`total_amount` is the sum of the signed components. After issue, an invoice's
+charges are never touched (A2.8's immutability).
+
+### Payments
+
+```txt
+POST .../invoices/{inv}/payments
+{ "method": "CASH", "amount": "500.00", "currency": "INR",
+  "provider_reference": ..., "received_at": ... }          -> 201
+```
+
+`ISSUED` only (`invoice_wrong_state`); currency must equal the invoice's
+(`currency_mismatch`); amount positive and no more than the outstanding
+balance (`payment_exceeds_balance`, 409). The invoice row is locked, so two
+payments cannot both fit the same balance. A payment that brings the balance
+to zero moves the invoice to `PAID`. Every payment through this endpoint is
+staff-recorded: `recorded_by` is the caller's person and the method is one of
+the offline set (`CASH`, `CHEQUE`, `BANK_TRANSFER`, `UPI`); `CARD` and
+`PROVIDER_HOSTED` need an adapter that does not exist (05.8.9). `state` is
+`COMPLETED`.
+
+### Reading
+
+`GET /invoices` checks `finance_reader` once (ADR-104). `GET /invoices/{inv}`
+checks `viewer` as the caller's person and principal together — the payer
+tuple is a `person`, `finance_reader from tenant` is a principal's — and a
+`DRAFT` additionally needs `finance_reader`: a payer is not shown a bill
+nobody has issued. An unissued draft is a 404 to anyone else (A3.3).
+
+### `/me`
+
+```txt
+GET /t/{t}/me/consumption?limit&cursor     own live records, newest first
+GET /t/{t}/me/invoices?limit&cursor        own invoices, ISSUED and PAID only
+```
+
+Both are scoped by the caller's own person id and run no graph check: the
+rows are the caller's by identity, and RLS already bounds the tenant. A
+principal with no person gets an empty page.
+
+---
+
 ## A3.8 Not in the slice
 
 ```txt
@@ -529,16 +893,19 @@ Present in the design, absent from the API until something needs them.
 }
 ```
 
-`permissions` is exactly five candidates, each a full 6.1 check against the
+`permissions` is exactly six candidates, each a full 6.1 check against the
 tenant object named in the path: `tenant:admin`, `tenant:member`,
-`tenant:finance_reader`, `tenant:safeguarding_reader` and
-`tenant:may_approve_membership`. Five checks, fixed, whatever the tenant
-contains; only the ones that pass are listed.
+`tenant:finance_reader`, `tenant:finance_manager`,
+`tenant:safeguarding_reader` and `tenant:may_approve_membership`. Six checks,
+fixed, whatever the tenant contains; only the ones that pass are listed.
+`finance_manager` joined with A3.11: the client must show or hide
+issue-and-pay on it, exactly as it does admission on
+`may_approve_membership`.
 
 `may_approve_membership` joined the set with ADR-110. It is tenant-scoped and
 role-grantable, and 8.3's admission endpoint is the first thing the client
-must show or hide on it — which is exactly what this endpoint is for. Three of
-the five now resolve through a role as readily as through a direct grant, and
+must show or hide on it — which is exactly what this endpoint is for. Four of
+the six now resolve through a role as readily as through a direct grant, and
 the response says nothing about which: the client is told what it may do, not
 how it came to be allowed.
 

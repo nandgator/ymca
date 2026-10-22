@@ -955,8 +955,14 @@ CREATE TABLE consumption_record (
     allocation_id       uuid REFERENCES allocation,   -- realization. ADR-096
     variant_code        text,
     supersedes_id       uuid REFERENCES consumption_record,
-    recorded_at         timestamptz NOT NULL DEFAULT now()
+    recorded_at         timestamptz NOT NULL DEFAULT now(),
+    -- A correction that says no consumption occurred (0006, A3.10).
+    voided              boolean NOT NULL DEFAULT false,
+    CHECK (NOT voided OR supersedes_id IS NOT NULL)
 );
+-- A record is superseded once, so a chain cannot fork (0006).
+CREATE UNIQUE INDEX consumption_record_superseded_once
+  ON consumption_record (supersedes_id) WHERE supersedes_id IS NOT NULL;
 CREATE UNIQUE INDEX one_live_record_per_subject_type_day
   ON consumption_record (consumption_type_id, subject_person_id, occurred_on)
   WHERE supersedes_id IS NULL;
@@ -981,6 +987,32 @@ CREATE TABLE expected_absence (
     withdrawn_at          timestamptz
 );
 CREATE INDEX ON expected_absence USING gist (subject_person_id, period);
+
+-- Exactly-once period close (0006, A3.10). The exclusion IS the mechanism.
+CREATE TABLE consumption_period_close (
+    id                  uuid PRIMARY KEY,
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    consumption_type_id uuid NOT NULL REFERENCES consumption_type,
+    subject_person_id   uuid NOT NULL REFERENCES person,
+    period              daterange NOT NULL,         -- [from, until)
+    closed_by_person_id uuid NOT NULL REFERENCES person,
+    closed_at           timestamptz NOT NULL DEFAULT now(),
+    obligated_units     int NOT NULL,
+    summary             jsonb NOT NULL,   -- the published ConsumptionPeriodClosed
+    EXCLUDE USING gist (consumption_type_id WITH =, subject_person_id WITH =,
+                        period WITH &&)
+);
+
+-- Finance's price for a unit of consumption (0006, A3.11).
+CREATE TABLE consumption_rate (
+    id                  uuid PRIMARY KEY,
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    consumption_type_id uuid NOT NULL REFERENCES consumption_type,
+    amount              numeric(14,2) NOT NULL,
+    currency            char(3) NOT NULL,
+    valid_during        daterange NOT NULL,
+    EXCLUDE USING gist (consumption_type_id WITH =, valid_during WITH &&)
+);
 ```
 
 ---
