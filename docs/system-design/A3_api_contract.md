@@ -114,6 +114,7 @@ The codes every endpoint may emit, and their status:
 409  period_closed           the day lies in a period already closed (A3.10)
 409  period_already_closed   that period overlaps one already closed (A3.10)
 409  obligation_overlaps     an obligation of that type already covers those days
+409  option_code_taken       that option code is already used on the type
 409  rate_overlaps           a rate already covers those days (A3.11)
 409  no_rate                 obligated units but no rate in force (A3.11)
 409  currency_mismatch       two currencies where one is required (A3.11)
@@ -549,13 +550,20 @@ endpoint creates a role assignment, so nothing could grant `may_close_period`
 or `may_record_for_other` either. `may_correct_late` joined the type with the
 same shape, because 05.10.7 requires it and A1.2 declared no such relation.
 
+### Defining a type
+
+`POST /t/{t}/consumption-types` takes `correction_window_days` (optional;
+null is no limit, 05.10.7) beside `name`, `obligates`, `recurrence` and
+`record_mode`, and the type reports it back. A window of zero days makes
+every correction after the day itself late.
+
 ### Recording
 
 ```txt
 POST /t/{t}/consumption-types/{ct}/records
 Idempotency-Key: <client-generated>                       required (A3.6)
 { "subject_person_id": ...,        optional; default = the caller's person
-  "occurred_on": "2026-10-04",     required; not in the future
+  "occurred_on": "2026-10-04",     required; not more than a day ahead of UTC
   "variant_code": "NONVEG",        optional
   "option_codes": ["EGG"] }        optional
     -> 201 { id, consumption_type_id, subject_person_id, actor_person_id,
@@ -634,7 +642,8 @@ Every `date` in this section is a calendar day, and the `tstzrange` columns
 store `[from 00:00 UTC, until+1 00:00 UTC)`. A tenant time zone is not
 modelled (11.2), so a late-evening meal in another zone is the tenant's own
 `occurred_on` to state, which is why `occurred_on` is a date the caller
-supplies and never a timestamp the server derives. API ranges are **inclusive**
+supplies and never a timestamp the server derives, and "the future" means more
+than one day ahead of UTC — the widest zone offset. API ranges are **inclusive**
 at both ends (`"from": "2026-10-01", "to": "2026-10-31"`).
 
 ### Corrections
@@ -654,6 +663,13 @@ occurred** (A2.9 gained `consumption_record.voided`, migration 0006): without
 it a mistaken record could only be changed, never taken back, and ADR-098
 forbids deleting it. A voided head counts as nothing at close and is hidden
 from the default list.
+
+A voided head can itself be corrected, and a non-void correction of it
+revives the day: a void is a statement, not a deletion, and the day must
+not be lost to a mis-tap. Voiding a record that is already void is
+`invalid_request`. An absent record answers 404 before there is a type to
+check permission against; record ids are unguessable, which is what makes
+that cheap.
 
 ```txt
 r is not the live head of its chain      409 record_already_corrected

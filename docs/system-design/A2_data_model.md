@@ -769,6 +769,11 @@ CREATE TABLE invoice (
     UNIQUE (tenant_id, number)
 );
 -- Issued invoices are immutable. Corrections are credit notes.
+-- Added by 0007 (A3.11): created_at timestamptz NOT NULL DEFAULT now(), the
+-- order a list pages by; CHECK (state IN ('DRAFT','ISSUED','PAID')); a
+-- partial UNIQUE (tenant_id, payer_party_id, currency) WHERE state='DRAFT',
+-- so "the payer's open draft" is a rule the database holds; and `party` is
+-- unique per person and per organization.
 
 CREATE TABLE invoice_number_series (
     tenant_id  uuid NOT NULL REFERENCES tenant,
