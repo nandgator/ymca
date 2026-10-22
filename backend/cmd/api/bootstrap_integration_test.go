@@ -39,7 +39,7 @@ func TestBootstrap_FromNothingToAProvisionedTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close) // registered before the cleanup below, so it runs AFTER it
 	fga, err := authz.NewFGA(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -84,12 +84,18 @@ func TestBootstrap_FromNothingToAProvisionedTenant(t *testing.T) {
 			}
 			_ = writer.DeleteTuples(bg, tuples)
 			_, _ = pool.Pool().Exec(bg, `DELETE FROM authorization_outbox WHERE aggregate_id = ANY($1::uuid[])`, agg)
-			_, _ = pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, tenantID)
+			if _, err := pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, tenantID); err != nil {
+				t.Errorf("cleanup could not delete the tenant: %v", err)
+			}
 		}
-		_, _ = pool.Pool().Exec(bg, `DELETE FROM principal WHERE idp_subject = ANY($1)`,
-			[]string{opSubject, ownerSubject})
-		_, _ = pool.Pool().Exec(bg, `DELETE FROM person WHERE display_name = ANY($1)`,
-			[]string{"Bootstrap Operator", "Bootstrap Owner"})
+		if _, err := pool.Pool().Exec(bg, `DELETE FROM principal WHERE idp_subject = ANY($1)`,
+			[]string{opSubject, ownerSubject}); err != nil {
+			t.Errorf("cleanup could not delete the principals: %v", err)
+		}
+		if _, err := pool.Pool().Exec(bg, `DELETE FROM person WHERE display_name = ANY($1)`,
+			[]string{"Bootstrap Operator", "Bootstrap Owner"}); err != nil {
+			t.Errorf("cleanup could not delete the people: %v", err)
+		}
 	}
 	cleanup()
 	t.Cleanup(cleanup)

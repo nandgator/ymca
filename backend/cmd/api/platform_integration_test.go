@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/jackc/pgx/v5"
 	"io"
 	"log/slog"
 	"net/http"
@@ -143,8 +144,17 @@ func TestPlatformProvisioning_EndToEnd(t *testing.T) {
 		if bundleID != "" {
 			_, _ = pool.Pool().Exec(bg,
 				`DELETE FROM authorization_outbox WHERE aggregate_id = $1::uuid`, bundleID)
-			_, _ = pool.Pool().Exec(bg,
-				`DELETE FROM entitlement_bundle WHERE id = $1::uuid`, bundleID)
+			// entitlement_bundle is policied: through a bare pool connection
+			// A2.1's fail-closed error raises, and this cleanup ignored it for
+			// five weeks — the bundle survived, the tenant row could not be
+			// deleted under it, and every run left a tenant behind. It runs
+			// inside the tenant's transaction now.
+			if err := pool.InTenantTx(bg, newTenantID, func(tx pgx.Tx) error {
+				_, err := tx.Exec(bg, `DELETE FROM entitlement_bundle WHERE id = $1::uuid`, bundleID)
+				return err
+			}); err != nil {
+				t.Errorf("cleanup could not delete the bundle: %v", err)
+			}
 		}
 		for _, id := range []string{opPrincipal, bystanderPrin, tenantPrin, newOwnerPrincipal} {
 			if id != "" {
@@ -158,7 +168,9 @@ func TestPlatformProvisioning_EndToEnd(t *testing.T) {
 		}
 		for _, id := range []string{hostTenant, newTenantID} {
 			if id != "" {
-				_, _ = pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, id)
+				if _, err := pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, id); err != nil {
+					t.Errorf("cleanup could not delete tenant %s: %v", id, err)
+				}
 			}
 		}
 	})
