@@ -110,6 +110,12 @@ type tenant
     # above. ADR-114, ADR-110
     define may_register_person: [principal, role_assignment#holder] or admin
 
+    # The write side of finance_reader: defining a consumption rate,
+    # issuing an invoice, recording a payment. Role-grantable so a
+    # bursar can be given money work without administering the
+    # association. A3.11, ADR-110
+    define finance_manager: [principal, role_assignment#holder] or admin
+
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
     # same sense in 05.1.5 — that one is granted on `affiliation`
@@ -327,7 +333,12 @@ type consumption_type
     define tenant: [tenant]
     define auth_parent: [organizational_unit, resource]
 
-    define manager: [principal] or admin from auth_parent
+    # The tenant's own admin manages every type in it. Without
+    # `admin from tenant` the owner of a freshly provisioned tenant
+    # could define a type and then never record for another person,
+    # correct a record or close a period: no API creates a role
+    # assignment, so nothing else could ever grant it. A3.10
+    define manager: [principal] or admin from auth_parent or admin from tenant
     define entitled: [entitlement_bundle#beneficiary]
 
     # Self-service recording follows entitlement, exactly as
@@ -335,6 +346,8 @@ type consumption_type
     define may_record: entitled or manager
     define may_record_for_other: [principal, role_assignment#holder] or manager
     define may_correct: [principal, role_assignment#holder] or manager
+    # Beyond the type's correction window (05.10.7). Audited NOTABLE.
+    define may_correct_late: [principal, role_assignment#holder] or manager
     define may_read: [principal, role_assignment#holder] or manager
     define may_close_period: [role_assignment#holder] or manager
 
@@ -624,6 +637,22 @@ principal:frontdesk       may_register_person  tenant:bombay
 Front desk staff who take applications but do not admit members are the
 ordinary case this route exists for (05.3.4).
 
+### Must ALLOW — a tenant's admin manages its consumption and its money (A3.10, A3.11)
+
+```txt
+principal:bombay-admin    may_close_period     consumption_type:bombay/lunch
+principal:bombay-admin    may_correct_late     consumption_type:bombay/lunch
+principal:bombay-admin    finance_manager      tenant:bombay
+```
+
+`admin from tenant` on `consumption_type.manager` is what lets the owner of a
+new tenant do any of this. The lines name `bombay/lunch`, a type with a
+`tenant` tuple and **no `auth_parent`**, as every type created through the API
+is: `bombay/dinner` hangs under a unit the tenant admin already administers
+through the DAG, so asserting on it passes with or without the new path. The
+first draft did exactly that, and removing `admin from tenant` left all
+forty-seven assertions green.
+
 ### Must REFUSE — the grantable set (ADR-110)
 
 Not denials. The model must reject these writes outright.
@@ -688,6 +717,12 @@ principal:bob-personal administered_by      tenant:bombay
 
 # may_register_person is not membership. ADR-114
 principal:alice        may_register_person  tenant:bombay
+
+# Managing consumption and money is a job, not membership (A3.10, A3.11)
+principal:alice        may_close_period     consumption_type:bombay/lunch
+principal:alice        finance_manager      tenant:bombay
+principal:natl-sec     may_close_period     consumption_type:bombay/lunch
+principal:natl-sec     finance_manager      tenant:bombay
 ```
 
 The first block is the one that matters. If `natl-sec` ever resolves to

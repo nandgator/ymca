@@ -90,6 +90,9 @@ tuples:
 
   # ── Bombay · consumption ──────────────────────────────────
   - { user: "tenant:bombay", relation: "tenant", object: "consumption_type:bombay/dinner" }
+  # A type with NO auth_parent, as every type created through the API is. The
+  # tenant admin must reach it through `admin from tenant` alone.
+  - { user: "tenant:bombay", relation: "tenant", object: "consumption_type:bombay/lunch" }
   - { user: "organizational_unit:bombay/procter", relation: "auth_parent", object: "consumption_type:bombay/dinner" }
   - { user: "entitlement_bundle:mess-access#beneficiary", relation: "entitled", object: "consumption_type:bombay/dinner" }
 
@@ -425,6 +428,50 @@ assertions:
     expect: false
 
   # ── A1.7 · Entitlement does not confer recording for others ──
+
+  # ── A1.7 · A tenant's admin manages its consumption and its money ──
+
+  - name: "the tenant admin may close a consumption period"
+    user: "principal:bombay-admin"
+    relation: "may_close_period"
+    object: "consumption_type:bombay/lunch"
+    expect: true
+
+  - name: "the tenant admin may correct late"
+    user: "principal:bombay-admin"
+    relation: "may_correct_late"
+    object: "consumption_type:bombay/lunch"
+    expect: true
+
+  - name: "the tenant admin holds finance_manager"
+    user: "principal:bombay-admin"
+    relation: "finance_manager"
+    object: "tenant:bombay"
+    expect: true
+
+  - name: "membership is not authority to close a period"
+    user: "principal:alice"
+    relation: "may_close_period"
+    object: "consumption_type:bombay/lunch"
+    expect: false
+
+  - name: "membership is not finance_manager"
+    user: "principal:alice"
+    relation: "finance_manager"
+    object: "tenant:bombay"
+    expect: false
+
+  - name: "the national body closes no period"
+    user: "principal:natl-sec"
+    relation: "may_close_period"
+    object: "consumption_type:bombay/lunch"
+    expect: false
+
+  - name: "the national body is no finance_manager"
+    user: "principal:natl-sec"
+    relation: "finance_manager"
+    object: "tenant:bombay"
+    expect: false
 
   - name: "entitlement is not authority over other people"
     user: "principal:alice"

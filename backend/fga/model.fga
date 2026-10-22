@@ -68,6 +68,12 @@ type tenant
     # above. ADR-114, ADR-110
     define may_register_person: [principal, role_assignment#holder] or admin
 
+    # The write side of finance_reader: defining a consumption rate,
+    # issuing an invoice, recording a payment. Role-grantable so a
+    # bursar can be given money work without administering the
+    # association. A3.11, ADR-110
+    define finance_manager: [principal, role_assignment#holder] or admin
+
     # Internal administration of this tenant, by its own admins or
     # by break-glass. NOT the cross-tenant authority verb of the
     # same sense in 05.1.5 — that one is granted on `affiliation`
@@ -285,7 +291,12 @@ type consumption_type
     define tenant: [tenant]
     define auth_parent: [organizational_unit, resource]
 
-    define manager: [principal] or admin from auth_parent
+    # The tenant's own admin manages every type in it. Without
+    # `admin from tenant` the owner of a freshly provisioned tenant
+    # could define a type and then never record for another person,
+    # correct a record or close a period: no API creates a role
+    # assignment, so nothing else could ever grant it. A3.10
+    define manager: [principal] or admin from auth_parent or admin from tenant
     define entitled: [entitlement_bundle#beneficiary]
 
     # Self-service recording follows entitlement, exactly as
@@ -293,6 +304,8 @@ type consumption_type
     define may_record: entitled or manager
     define may_record_for_other: [principal, role_assignment#holder] or manager
     define may_correct: [principal, role_assignment#holder] or manager
+    # Beyond the type's correction window (05.10.7). Audited NOTABLE.
+    define may_correct_late: [principal, role_assignment#holder] or manager
     define may_read: [principal, role_assignment#holder] or manager
     define may_close_period: [role_assignment#holder] or manager
 
