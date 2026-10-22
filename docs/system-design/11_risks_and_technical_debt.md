@@ -89,6 +89,7 @@ mediated by verified contact points so existence is not disclosed.
 | Finance: financial year is April                        | `invoice_number_series.series` assumes an April start for every tenant (A3.11)                                                                                                                             | A3.11          |
 | Finance: no credit notes, no void                       | A3.11 stops at ISSUED/PAID; a wrong issued invoice has no correction path though A2.8 promises credit notes                                                                                                | A3.11          |
 | Close after payment                                     | A correction is refused (`period_closed`) once its period is closed; the remedy is a credit note, which does not exist                                                                                     | A3.11          |
+| A warden cannot search the member directory             | `GET /memberships` needs `may_approve_membership`; a person who may only record for others names a member by id (A3.12)                                                                                    | A3.12          |
 
 **Closed this round, this time by code.** The cycle-check row is gone
 because migration 0005 exists, not because a decision was taken: ADR-016's

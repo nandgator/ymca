@@ -574,3 +574,67 @@ func handleMeConsumption(pool *db.DB, logger *slog.Logger) http.HandlerFunc {
 		httpx.WriteJSON(w, http.StatusOK, page.Of(rows, params, consumption.RecordKey))
 	}
 }
+
+// handleMeConsumptionTypes lists the active types the caller may record
+// against — what a member's "record my meal" screen offers.
+//
+// GET /consumption-types is a tenant-admin list and a member cannot read it,
+// yet a member must be told what they may record; "a permission on any other
+// object is reported by the endpoint that returns that object" (A3.9). One
+// graph question per row, never ListObjects (ADR-104 refuses it).
+//
+// The questions go to OpenFGA directly and not through authz.Check: this is
+// VISIBILITY, not a decision. Nothing is granted by appearing here — recording
+// runs the full 6.1 check — and a stranger listing the catalogue would
+// otherwise write a DENY to the audit trail for every type in the tenant.
+// The person is asked first and the principal second, for the reason
+// authz.Request.AlsoAsPerson gives.
+func handleMeConsumptionTypes(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		params, err := httpx.PageParams(r)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		principal, _ := httpx.PrincipalFromContext(r.Context())
+		tenantID := r.PathValue("tenant")
+
+		var fetched []consumption.Type
+		err = pool.InTenantTx(r.Context(), tenantID, func(tx pgx.Tx) error {
+			var err error
+			fetched, err = consumption.ListActive(r.Context(), tx, tenantID, params)
+			return err
+		})
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+
+		// The cursor is taken from the fetched page, before filtering, so a
+		// page the filter shortens still resumes where it stopped.
+		pg := page.Of(fetched, params, consumption.TypeKey)
+		visible := make([]consumption.Type, 0, len(pg.Items))
+		for _, t := range pg.Items {
+			object := "consumption_type:" + t.ID
+			subjects := []string{"principal:" + principal.ID}
+			if principal.PersonID != "" {
+				subjects = []string{"person:" + principal.PersonID, "principal:" + principal.ID}
+			}
+			for _, subject := range subjects {
+				ok, err := fga.Check(r.Context(), subject, "may_record", object, nil)
+				if err != nil {
+					logger.ErrorContext(r.Context(), "visibility check failed",
+						"error", err, "request_id", httpx.RequestIDFromContext(r.Context()))
+					httpx.WriteError(w, httpx.CodeInternal, "authorization check failed")
+					return
+				}
+				if ok {
+					visible = append(visible, t)
+					break
+				}
+			}
+		}
+		pg.Items = visible
+		httpx.WriteJSON(w, http.StatusOK, pg)
+	}
+}

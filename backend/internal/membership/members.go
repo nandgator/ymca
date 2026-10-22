@@ -102,3 +102,63 @@ func IsActiveMember(ctx context.Context, tx pgx.Tx, tenantID, personID string) (
 	}
 	return held, nil
 }
+
+// DirectoryEntry is one membership as the front desk sees it: with the
+// person's name, which UnitMember deliberately lacks.
+type DirectoryEntry struct {
+	MembershipID string  `json:"membership_id"`
+	PersonID     string  `json:"person_id"`
+	DisplayName  string  `json:"display_name"`
+	Number       string  `json:"number"`
+	State        string  `json:"state"`
+	PlanID       string  `json:"plan_id"`
+	OrgUnitID    *string `json:"org_unit_id"`
+}
+
+// ListDirectory pages every membership in the tenant with the holder's name,
+// optionally narrowed by q — a prefix of the number or a fragment of the name.
+//
+// UnitMember carries no name because `member_read` on a unit must not carry a
+// person's record. This list is gated on `may_approve_membership`, the
+// authority that took the application and so already knows the name, which is
+// why the join is permitted here and was refused there (A3.12).
+//
+// The person row is global (A2.1) and is read only THROUGH a membership of
+// this tenant, so the tenant sees names of its own members and no others.
+func ListDirectory(
+	ctx context.Context, tx pgx.Tx, tenantID, q string, p page.Params,
+) ([]DirectoryEntry, error) {
+	var afterNumber string
+	if len(p.Key) == 1 {
+		afterNumber = p.Key[0]
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT m.id::text, m.person_id::text, pe.display_name, m.number, m.state,
+		       m.plan_id::text, m.org_unit_id::text
+		  FROM membership m JOIN person pe ON pe.id = m.person_id
+		 WHERE m.tenant_id = $1
+		   AND ($2::text = '' OR m.number > $2::text)
+		   AND ($3::text = '' OR m.number ILIKE $3::text || '%'
+		                      OR pe.display_name ILIKE '%' || $3::text || '%')
+		 ORDER BY m.number
+		 LIMIT $4
+	`, tenantID, afterNumber, q, p.Fetch())
+	if err != nil {
+		return nil, fmt.Errorf("membership: list directory: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DirectoryEntry
+	for rows.Next() {
+		var e DirectoryEntry
+		if err := rows.Scan(&e.MembershipID, &e.PersonID, &e.DisplayName, &e.Number,
+			&e.State, &e.PlanID, &e.OrgUnitID); err != nil {
+			return nil, fmt.Errorf("membership: scan directory entry: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DirectoryKey is the sort key ListDirectory orders by.
+func DirectoryKey(e DirectoryEntry) []string { return []string{e.Number} }

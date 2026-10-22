@@ -236,6 +236,8 @@ func registerRoutes(mux *http.ServeMux, pool *db.DB, fga *authz.FGA, logger *slo
 	tenantRoute("POST "+t+"/invoices/{invoice}/issue", handleIssueInvoice(pool, fga, logger))
 	tenantRoute("POST "+t+"/invoices/{invoice}/payments", handlePayInvoice(pool, fga, logger))
 	tenantRoute("GET "+t+"/me/consumption", handleMeConsumption(pool, logger))
+	tenantRoute("GET "+t+"/me/consumption-types", handleMeConsumptionTypes(pool, fga, logger))
+	tenantRoute("GET "+t+"/memberships", handleListDirectory(pool, fga, logger))
 	tenantRoute("GET "+t+"/me/invoices", handleMeInvoices(pool, logger))
 }
 

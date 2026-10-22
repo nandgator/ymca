@@ -30,6 +30,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
+	"github.com/nandgator/ymca/backend/internal/page"
 )
 
 // admitPermission is the relation admission checks, on the TENANT.
@@ -98,5 +99,34 @@ func handleAdmitMember(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.Ha
 					ValidUntil: body.ValidUntil,
 				})
 			})
+	}
+}
+
+// handleListDirectory is the front desk's member list: every membership with
+// the holder's name, searchable. Checked as may_approve_membership on the
+// tenant — the authority that took the application and so already knows the
+// name (A3.12). It is one scope check for the page (ADR-104).
+func handleListDirectory(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeTenant(w, r, pool, fga, logger, admitPermission) {
+			return
+		}
+		params, err := httpx.PageParams(r)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		tenantID := r.PathValue("tenant")
+		var rows []membership.DirectoryEntry
+		err = pool.InTenantTx(r.Context(), tenantID, func(tx pgx.Tx) error {
+			var err error
+			rows, err = membership.ListDirectory(r.Context(), tx, tenantID, r.URL.Query().Get("q"), params)
+			return err
+		})
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, page.Of(rows, params, membership.DirectoryKey))
 	}
 }

@@ -118,3 +118,37 @@ func ListTypes(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) (
 
 // TypeKey is the sort key ListTypes orders by.
 func TypeKey(t Type) []string { return []string{t.Name, t.ID} }
+
+// ListActive pages the tenant's ACTIVE types by name. The handler filters the
+// page to those the caller may record against (GET /me/consumption-types), so
+// a returned page can be shorter than its limit without being the last one.
+func ListActive(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) ([]Type, error) {
+	var afterName, afterID string
+	if len(p.Key) == 2 {
+		afterName, afterID = p.Key[0], p.Key[1]
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id::text, name, obligates, recurrence, record_mode, status,
+		       EXTRACT(day FROM correction_window)::int
+		  FROM consumption_type
+		 WHERE tenant_id = $1 AND status = 'ACTIVE'
+		   AND ($2 = '' OR (name, id::text) > ($2, $3))
+		 ORDER BY name, id
+		 LIMIT $4
+	`, tenantID, afterName, afterID, p.Fetch())
+	if err != nil {
+		return nil, fmt.Errorf("consumption: list active types: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Type
+	for rows.Next() {
+		var t Type
+		if err := rows.Scan(&t.ID, &t.Name, &t.Obligates, &t.Recurrence,
+			&t.RecordMode, &t.Status, &t.CorrectionWindowDays); err != nil {
+			return nil, fmt.Errorf("consumption: scan type: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

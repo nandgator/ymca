@@ -282,8 +282,10 @@ FINANCE                                            (detail: A3.11)
   POST   /t/{t}/invoices/{inv}/issue                allocate number (ADR-103)
   POST   /t/{t}/invoices/{inv}/payments             record a payment
 
-ME
+ME                                                 (detail: A3.11, A3.12)
+  GET    /t/{t}/memberships?q=                     the member directory
   GET    /t/{t}/me                                 principal, kind, permissions
+  GET    /t/{t}/me/consumption-types               what I may record
   GET    /t/{t}/me/consumption                     own records
   GET    /t/{t}/me/invoices                        own invoices
 ```
@@ -882,6 +884,53 @@ GET /t/{t}/me/invoices?limit&cursor        own invoices, ISSUED and PAID only
 Both are scoped by the caller's own person id and run no graph check: the
 rows are the caller's by identity, and RLS already bounds the tenant. A
 principal with no person gets an empty page.
+
+---
+
+## A3.12 What the app reads
+
+8.4 is one permission-gated Flutter app for members and staff, and building
+the screens found two reads the slice had no endpoint for.
+
+```txt
+GET /t/{t}/me/consumption-types       types the caller may record against
+GET /t/{t}/memberships?q=             the member directory, with names
+```
+
+### `GET /me/consumption-types`
+
+`GET /consumption-types` is a tenant-admin list, so a member could not be
+told what they may record — and "which types may I record against" is exactly
+the object-scoped question A3.9 says `/me` cannot enumerate, and says to
+answer "where the object is returned". This is that place: the active types
+of the tenant, filtered to those where the caller holds `may_record` as their
+person or as their principal, **one graph question per row** and never
+`ListObjects` (ADR-104 refuses it). A page can come back shorter than its
+`limit` without being the last one; `next_cursor` is taken before the filter,
+so it resumes where the page stopped.
+
+The questions go to OpenFGA directly and not through 6.1. This is visibility,
+not a decision: nothing is granted by a type appearing here, recording runs
+the full check, and a person with no membership listing the catalogue would
+otherwise write a DENY to the audit trail for every type in the tenant. The
+tenant admin sees every type, because `manager` is inside `may_record`.
+
+### `GET /memberships`
+
+Every membership in the tenant with the holder's `display_name`, paged by
+number (A3.5), narrowed by `q` — a prefix of the number or a fragment of the
+name. Checked as `may_approve_membership` on the tenant, once for the page.
+
+`GET /units/{unit}/members` deliberately carries no names: `member_read` on a
+unit must not carry a person's record. This list may, because the authority it
+needs is the one that took the application and already knows the name. `person`
+is global (A2.1) and is read only through a membership of this tenant, so the
+tenant sees the names of its own members and no others.
+
+A warden who may record for others (`may_record_for_other`, per type) but not
+approve memberships cannot read this list, and the app lets them name a person
+by id instead. A directory scoped to the people a type's staff may record for
+would need a reverse query ADR-104 refuses. Open, 11.2.
 
 ---
 
