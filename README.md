@@ -12,7 +12,18 @@ a pile of disconnected single-tenant deployments.
 
 ## Start here
 
-**The design is written; the implementation is not.**
+**The design is written, and the first slice is built.** A tenant can be
+provisioned, populated, admitted into, fed, billed and paid — through the API
+and through one permission-gated Flutter app — from a cold start. What is built
+and how to run it:
+
+| Directory                                                | What it is                                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [`backend/`](./backend/)                                 | the Go API, its migrations and its authorization model — start at its README |
+| [`app/`](./app/)                                         | the Flutter client for members and staff (web, Android, Linux)               |
+| [`docs/system-design/`](./docs/system-design/)           | the design record; the code follows it and says where it does not            |
+| [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) | what must pass: docs, build, model, integration suite, app                   |
+
 [`docs/system-design/`](./docs/system-design/) is the full architecture
 description (arc42 + C4 + ADRs + DDD). Read it before writing code:
 

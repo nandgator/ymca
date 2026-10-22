@@ -115,6 +115,9 @@ func serve(logger *slog.Logger) error {
 	registerRoutes(mux, pool, fga, logger)
 
 	handler := httpx.Chain(mux,
+		// Outermost: a preflight carries no credential and is answered before
+		// anything that would demand one.
+		httpx.CORS(cfg.CORSOrigins),
 		httpx.Recover(logger),
 		httpx.RequestID(),
 		httpx.Logging(logger),

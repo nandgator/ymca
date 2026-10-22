@@ -29,9 +29,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Formatting is clean
-        run: bunx prettier --check 'docs/**/*.md' 'backend/README.md'
+        run: bunx prettier --check 'docs/**/*.md' README.md backend/README.md app/README.md
       - name: Lint
-        run: bunx markdownlint-cli2 'docs/**/*.md' 'backend/README.md'
+        run: bunx markdownlint-cli2 'docs/**/*.md' README.md backend/README.md app/README.md
 
   backend:
     runs-on: ubuntu-latest

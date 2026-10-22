@@ -92,7 +92,16 @@ export YMCA_FGA_STORE_ID='...'    # printed by `fga apply`
 export YMCA_FGA_MODEL_ID='...'    # printed by `fga apply`
 export YMCA_AUTH_PROVIDER='dev'   # no default; see The API, below
 export YMCA_DEV_AUTH_SECRET='...' # >= 32 bytes; only read by the dev provider
+export YMCA_CORS_ORIGINS='http://localhost:8090'   # optional; see below
 ```
+
+`YMCA_CORS_ORIGINS` is a comma-separated list of browser origins allowed to call
+the API. It is **closed by default**: with nothing set no CORS header is sent and
+a browser refuses cross-origin calls, exactly as before. The Flutter web build is
+served from its own origin and needs it listed; an Android or Linux build needs
+nothing. A preflight is answered before authentication, because a browser sends
+it without the `Authorization` header, and `Idempotency-Key` is in the allowed
+headers — without it the browser strips the header A3.6 depends on, silently.
 
 `YMCA_DATABASE_URL` names two different roles depending on the command, and
 the difference matters — see **Roles** below.
@@ -289,6 +298,23 @@ go run  -tags dev ./cmd/api mint-platform-token <idp-subject>
 tenant left off, and `dev.MintPlatform` is a separate function from
 `dev.Mint` for the same reason: `mint-token` still refuses an empty tenant, so
 platform authority is never what you get by omitting an argument.
+
+**The first platform operator is a command, not an endpoint.** Everything
+else is reachable through the API, but the API is what an operator uses, so the
+first one cannot be:
+
+```sh
+go run ./cmd/api bootstrap-operator <idp-subject> <display-name>
+```
+
+It is deliberately **not** behind the dev tag — a deployment needs its first
+operator, and "how does anyone ever provision a tenant" must have an answer in a
+build that cannot mint a credential. It creates a person and a `STAFF`
+principal for the subject (or finds the existing one) and writes
+`principal:<id> operator platform:main` directly, the one authorization fact
+written outside the outbox, because there is no tenant for the outbox to name. It
+is safe to run twice, which also repairs a run that died between the database and
+OpenFGA. The subject must match what the identity provider will assert.
 
 `mint-token` carries the same build tag as the provider, so a deployment build
 can no more issue a credential than it can accept one. The token it prints is

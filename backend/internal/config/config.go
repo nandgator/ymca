@@ -48,6 +48,11 @@ type Config struct {
 	// enforces the minimum-length rule itself, at Authenticator
 	// construction time, which is still before the process starts serving.
 	DevAuthSecret string
+
+	// CORSOrigins is the list of browser origins allowed to call the API
+	// (YMCA_CORS_ORIGINS, comma-separated). Empty means none: the Flutter web
+	// build needs its own origin listed, and a native build needs nothing.
+	CORSOrigins []string
 }
 
 // Load reads configuration from the environment. missing lists every absent
@@ -62,6 +67,7 @@ func Load() (Config, error) {
 		HTTPAddr:      envOr("YMCA_HTTP_ADDR", ":8000"),
 		AuthProvider:  os.Getenv("YMCA_AUTH_PROVIDER"),
 		DevAuthSecret: os.Getenv("YMCA_DEV_AUTH_SECRET"),
+		CORSOrigins:   splitList(os.Getenv("YMCA_CORS_ORIGINS")),
 	}
 
 	var missing []string
@@ -90,6 +96,16 @@ func LoadDatabaseOnly() (Config, error) {
 		return Config{}, fmt.Errorf("config: YMCA_DATABASE_URL is not set")
 	}
 	return Config{DatabaseURL: url}, nil
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func envOr(key, fallback string) string {
