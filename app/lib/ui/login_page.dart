@@ -36,11 +36,13 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Future<void> _submit() => context.read<AppController>().signIn(Session(
-        baseUrl: _base.text.trim(),
-        tenantId: _tenant.text.trim(),
-        token: _token.text.trim(),
-      ));
+  Future<void> _submit() => context.read<AppController>().signIn(
+    Session(
+      baseUrl: _base.text.trim(),
+      tenantId: _tenant.text.trim(),
+      token: _token.text.trim(),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -79,10 +81,13 @@ class _LoginPageState extends State<LoginPage> {
               if (c.error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(c.error!,
-                      key: const Key('login-error'),
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)),
+                  child: Text(
+                    c.error!,
+                    key: const Key('login-error'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
                 ),
               FilledButton(
                 key: const Key('sign-in'),
@@ -91,7 +96,8 @@ class _LoginPageState extends State<LoginPage> {
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Text('Sign in'),
               ),
             ],

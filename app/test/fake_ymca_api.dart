@@ -36,11 +36,18 @@ class FakeYmcaApi implements YmcaApi {
   final List<String> calls = [];
   ApiException? failWith;
 
+  /// Fails the NEXT call to a named method, once: `failCalls['admit'] = ...`.
+  /// `failWith` fails whichever call comes next, which is a blunt instrument
+  /// when a screen makes several calls before the one under test.
+  final Map<String, ApiException> failCalls = {};
+
   /// Closed periods the next [closePeriod] returns.
   List<ClosedPeriod> closeResult = [];
 
   void _record(String what) {
     calls.add(what);
+    final named = failCalls.remove(what.split(' ').first);
+    if (named != null) throw named;
     final f = failWith;
     if (f != null) {
       failWith = null;
@@ -48,7 +55,7 @@ class FakeYmcaApi implements YmcaApi {
     }
   }
 
-  static Page<T> _page<T>(List<T> items) => Page(items, '');
+  static Paged<T> _page<T>(List<T> items) => Paged(items, '');
 
   @override
   Future<Me> me() async {
@@ -57,26 +64,28 @@ class FakeYmcaApi implements YmcaApi {
   }
 
   @override
-  Future<Page<ConsumptionType>> myRecordableTypes({String? cursor}) async {
+  Future<Paged<ConsumptionType>> myRecordableTypes({String? cursor}) async {
     _record('myRecordableTypes');
     return _page(recordable);
   }
 
   @override
-  Future<Page<ConsumptionOption>> options(String typeId,
-      {String? cursor}) async {
+  Future<Paged<ConsumptionOption>> options(
+    String typeId, {
+    String? cursor,
+  }) async {
     _record('options type=$typeId');
     return _page(optionList);
   }
 
   @override
-  Future<Page<ConsumptionRecord>> myConsumption({String? cursor}) async {
+  Future<Paged<ConsumptionRecord>> myConsumption({String? cursor}) async {
     _record('myConsumption cursor=$cursor');
     return _page(records);
   }
 
   @override
-  Future<Page<Invoice>> myInvoices({String? cursor}) async {
+  Future<Paged<Invoice>> myInvoices({String? cursor}) async {
     _record('myInvoices');
     return _page(myInvoiceList);
   }
@@ -97,8 +106,10 @@ class FakeYmcaApi implements YmcaApi {
     List<String> optionCodes = const [],
     required String idempotencyKey,
   }) async {
-    _record('recordUse type=$typeId on=$occurredOn subject=$subjectPersonId '
-        'options=${optionCodes.join(",")} key=$idempotencyKey');
+    _record(
+      'recordUse type=$typeId on=$occurredOn subject=$subjectPersonId '
+      'options=${optionCodes.join(",")} key=$idempotencyKey',
+    );
     return ConsumptionRecord(
       id: 'rec-${calls.length}',
       typeId: typeId,
@@ -136,7 +147,10 @@ class FakeYmcaApi implements YmcaApi {
   }
 
   @override
-  Future<Page<DirectoryEntry>> directory({String? query, String? cursor}) async {
+  Future<Paged<DirectoryEntry>> directory({
+    String? query,
+    String? cursor,
+  }) async {
     _record('directory q=$query');
     final q = (query ?? '').toLowerCase();
     return _page([
@@ -144,12 +158,12 @@ class FakeYmcaApi implements YmcaApi {
         if (q.isEmpty ||
             m.displayName.toLowerCase().contains(q) ||
             m.number.toLowerCase().startsWith(q))
-          m
+          m,
     ]);
   }
 
   @override
-  Future<Page<MembershipPlan>> plans({String? cursor}) async {
+  Future<Paged<MembershipPlan>> plans({String? cursor}) async {
     _record('plans');
     return _page(planList);
   }
@@ -167,23 +181,26 @@ class FakeYmcaApi implements YmcaApi {
     required String number,
     required String idempotencyKey,
   }) async {
-    _record('admit person=$personId plan=$planId number=$number '
-        'key=$idempotencyKey');
+    _record(
+      'admit person=$personId plan=$planId number=$number '
+      'key=$idempotencyKey',
+    );
     return Membership(
-        id: 'm-${calls.length}',
-        personId: personId,
-        number: number,
-        state: 'ACTIVE');
+      id: 'm-${calls.length}',
+      personId: personId,
+      number: number,
+      state: 'ACTIVE',
+    );
   }
 
   @override
-  Future<Page<ConsumptionType>> consumptionTypes({String? cursor}) async {
+  Future<Paged<ConsumptionType>> consumptionTypes({String? cursor}) async {
     _record('consumptionTypes');
     return _page(typeList);
   }
 
   @override
-  Future<Page<ConsumptionRecord>> typeRecords(
+  Future<Paged<ConsumptionRecord>> typeRecords(
     String typeId, {
     String? subjectPersonId,
     String? from,
@@ -206,7 +223,7 @@ class FakeYmcaApi implements YmcaApi {
   }
 
   @override
-  Future<Page<Invoice>> invoices({String? cursor}) async {
+  Future<Paged<Invoice>> invoices({String? cursor}) async {
     _record('invoices');
     return _page(allInvoices);
   }
@@ -242,62 +259,68 @@ class FakeYmcaApi implements YmcaApi {
     required String currency,
     required String idempotencyKey,
   }) async {
-    _record('payInvoice id=$id method=$method amount=$amount '
-        'currency=$currency key=$idempotencyKey');
+    _record(
+      'payInvoice id=$id method=$method amount=$amount '
+      'currency=$currency key=$idempotencyKey',
+    );
     return Payment(
-        id: 'pay-${calls.length}',
-        method: method,
-        amount: amount,
-        currency: currency,
-        receivedAt: '2026-10-22T00:00:00Z');
+      id: 'pay-${calls.length}',
+      method: method,
+      amount: amount,
+      currency: currency,
+      receivedAt: '2026-10-22T00:00:00Z',
+    );
   }
 }
 
 /// Builders so a test states only what it cares about.
 Me meWith(Set<String> permissions, {String person = 'person-me'}) => Me(
-      principalId: 'princ-me',
-      kind: 'PERSONAL',
-      personId: person,
-      tenantId: 'tenant-1',
-      permissions: permissions,
-    );
+  principalId: 'princ-me',
+  kind: 'PERSONAL',
+  personId: person,
+  tenantId: 'tenant-1',
+  permissions: permissions,
+);
 
-ConsumptionType typeNamed(String name,
-        {String id = 'type-1', String mode = 'EITHER'}) =>
-    ConsumptionType(
-      id: id,
-      name: name,
-      obligates: false,
-      recurrence: null,
-      recordMode: mode,
-      status: 'ACTIVE',
-      correctionWindowDays: null,
-    );
+ConsumptionType typeNamed(
+  String name, {
+  String id = 'type-1',
+  String mode = 'EITHER',
+}) => ConsumptionType(
+  id: id,
+  name: name,
+  obligates: false,
+  recurrence: null,
+  recordMode: mode,
+  status: 'ACTIVE',
+  correctionWindowDays: null,
+);
 
-Invoice invoiceOf(String id,
-        {String state = 'ISSUED',
-        String total = '2000.00',
-        String? balance,
-        String? number = 'INV/2026-27/000001'}) =>
-    Invoice(
-      id: id,
-      number: state == 'DRAFT' ? null : number,
-      state: state,
-      currency: 'INR',
-      issuedAt: state == 'DRAFT' ? null : '2026-10-01T00:00:00Z',
-      dueAt: state == 'DRAFT' ? null : '2026-10-31T00:00:00Z',
-      totalAmount: state == 'DRAFT' ? null : total,
-      createdAt: '2026-10-01T00:00:00.000000',
-      balance: balance ?? (state == 'DRAFT' ? null : total),
-      charges: const [
-        Charge(
-          id: 'c1',
-          sourceType: 'CONSUMPTION',
-          description: 'Dinner, 2026-09-01 to 2026-09-30',
-          components: [
-            Component(kind: 'USAGE_FEE', amount: '2000.00', currency: 'INR')
-          ],
-        )
+Invoice invoiceOf(
+  String id, {
+  String state = 'ISSUED',
+  String total = '2000.00',
+  String? balance,
+  String? number = 'INV/2026-27/000001',
+}) => Invoice(
+  id: id,
+  number: state == 'DRAFT' ? null : number,
+  state: state,
+  currency: 'INR',
+  issuedAt: state == 'DRAFT' ? null : '2026-10-01T00:00:00Z',
+  dueAt: state == 'DRAFT' ? null : '2026-10-31T00:00:00Z',
+  totalAmount: state == 'DRAFT' ? null : total,
+  createdAt: '2026-10-01T00:00:00.000000',
+  balance: balance ?? (state == 'DRAFT' ? null : total),
+  charges: const [
+    Charge(
+      id: 'c1',
+      sourceType: 'CONSUMPTION',
+      description: 'Dinner, 2026-09-01 to 2026-09-30',
+      components: [
+        Component(kind: 'USAGE_FEE', amount: '2000.00', currency: 'INR'),
       ],
-      payments: const [],
-    );
+    ),
+  ],
+  payments: const [],
+);

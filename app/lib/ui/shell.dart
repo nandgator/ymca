@@ -27,12 +27,24 @@ class _Destination {
 final List<_Destination> _destinations = [
   _Destination('Meals', Icons.restaurant, null, (_) => const MealsPage()),
   _Destination('Bills', Icons.receipt_long, null, (_) => const BillsPage()),
-  _Destination('Members', Icons.groups, 'tenant:may_approve_membership',
-      (_) => const MembersPage()),
-  _Destination('Invoices', Icons.account_balance, 'tenant:finance_reader',
-      (_) => const InvoicesPage()),
-  _Destination('Close', Icons.event_available, 'tenant:admin',
-      (_) => const ClosePage()),
+  _Destination(
+    'Members',
+    Icons.groups,
+    'tenant:may_approve_membership',
+    (_) => const MembersPage(),
+  ),
+  _Destination(
+    'Invoices',
+    Icons.account_balance,
+    'tenant:finance_reader',
+    (_) => const InvoicesPage(),
+  ),
+  _Destination(
+    'Close',
+    Icons.event_available,
+    'tenant:admin',
+    (_) => const ClosePage(),
+  ),
 ];
 
 class AppShell extends StatefulWidget {
@@ -51,54 +63,57 @@ class _AppShellState extends State<AppShell> {
     final me = c.me!;
     final visible = [
       for (final d in _destinations)
-        if (d.permission == null || me.can(d.permission!)) d
+        if (d.permission == null || me.can(d.permission!)) d,
     ];
     final index = _index.clamp(0, visible.length - 1);
 
-    return LayoutBuilder(builder: (context, box) {
-      final wide = box.maxWidth >= 720;
-      final body = KeyedSubtree(
-        key: ValueKey(visible[index].label),
-        child: visible[index].builder(context),
-      );
-      final signOut = IconButton(
-        key: const Key('sign-out'),
-        tooltip: 'Sign out',
-        icon: const Icon(Icons.logout),
-        onPressed: c.signOut,
-      );
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(visible[index].label),
-          actions: [signOut],
-        ),
-        body: wide
-            ? Row(children: [
-                NavigationRail(
+    return LayoutBuilder(
+      builder: (context, box) {
+        final wide = box.maxWidth >= 720;
+        final body = KeyedSubtree(
+          key: ValueKey(visible[index].label),
+          child: visible[index].builder(context),
+        );
+        final signOut = IconButton(
+          key: const Key('sign-out'),
+          tooltip: 'Sign out',
+          icon: const Icon(Icons.logout),
+          onPressed: c.signOut,
+        );
+        return Scaffold(
+          appBar: AppBar(title: Text(visible[index].label), actions: [signOut]),
+          body: wide
+              ? Row(
+                  children: [
+                    NavigationRail(
+                      selectedIndex: index,
+                      onDestinationSelected: (i) => setState(() => _index = i),
+                      labelType: NavigationRailLabelType.all,
+                      destinations: [
+                        for (final d in visible)
+                          NavigationRailDestination(
+                            icon: Icon(d.icon),
+                            label: Text(d.label),
+                          ),
+                      ],
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: body),
+                  ],
+                )
+              : body,
+          bottomNavigationBar: wide || visible.length < 2
+              ? null
+              : NavigationBar(
                   selectedIndex: index,
                   onDestinationSelected: (i) => setState(() => _index = i),
-                  labelType: NavigationRailLabelType.all,
                   destinations: [
                     for (final d in visible)
-                      NavigationRailDestination(
-                          icon: Icon(d.icon), label: Text(d.label))
+                      NavigationDestination(icon: Icon(d.icon), label: d.label),
                   ],
                 ),
-                const VerticalDivider(width: 1),
-                Expanded(child: body),
-              ])
-            : body,
-        bottomNavigationBar: wide || visible.length < 2
-            ? null
-            : NavigationBar(
-                selectedIndex: index,
-                onDestinationSelected: (i) => setState(() => _index = i),
-                destinations: [
-                  for (final d in visible)
-                    NavigationDestination(icon: Icon(d.icon), label: d.label)
-                ],
-              ),
-      );
-    });
+        );
+      },
+    );
   }
 }

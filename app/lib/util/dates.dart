@@ -18,7 +18,6 @@ String daysAgo(int n, {DateTime? from}) =>
 DateTime? parseDay(String s) {
   final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(s);
   if (m == null) return null;
-  final d = DateTime.utc(
-      int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!));
+  final d = DateTime.utc(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!));
   return isoDay(d) == s ? d : null;
 }

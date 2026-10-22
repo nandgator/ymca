@@ -13,18 +13,17 @@ String _req(Json j, String k) => j[k] as String;
 
 /// A3.5's page. The server sends `next_cursor: ""` on the last page; both that
 /// and null mean there is no more.
-class Page<T> {
-  const Page(this.items, this.nextCursor);
+class Paged<T> {
+  const Paged(this.items, this.nextCursor);
 
   final List<T> items;
   final String? nextCursor;
 
   bool get hasMore => nextCursor != null && nextCursor!.isNotEmpty;
 
-  factory Page.fromJson(Json j, T Function(Json) item) => Page(
-        [for (final i in (j['items'] as List? ?? const [])) item(i as Json)],
-        _s(j, 'next_cursor'),
-      );
+  factory Paged.fromJson(Json j, T Function(Json) item) => Paged([
+    for (final i in (j['items'] as List? ?? const [])) item(i as Json),
+  ], _s(j, 'next_cursor'));
 }
 
 /// A3.9. `permissions` are "tenant:admin"-style strings; the client renders
@@ -53,14 +52,14 @@ class Me {
   bool get canManageFinance => can('tenant:finance_manager');
 
   factory Me.fromJson(Json j) => Me(
-        principalId: _req(j, 'principal_id'),
-        kind: _req(j, 'kind'),
-        personId: _s(j, 'person_id') ?? '',
-        tenantId: _req(j, 'tenant_id'),
-        permissions: {
-          for (final p in (j['permissions'] as List? ?? const [])) p as String
-        },
-      );
+    principalId: _req(j, 'principal_id'),
+    kind: _req(j, 'kind'),
+    personId: _s(j, 'person_id') ?? '',
+    tenantId: _req(j, 'tenant_id'),
+    permissions: {
+      for (final p in (j['permissions'] as List? ?? const [])) p as String,
+    },
+  );
 }
 
 class ConsumptionType {
@@ -91,14 +90,14 @@ class ConsumptionType {
   bool get allowsStaff => recordMode != 'SELF';
 
   factory ConsumptionType.fromJson(Json j) => ConsumptionType(
-        id: _req(j, 'id'),
-        name: _req(j, 'name'),
-        obligates: j['obligates'] as bool? ?? false,
-        recurrence: _s(j, 'recurrence'),
-        recordMode: _req(j, 'record_mode'),
-        status: _req(j, 'status'),
-        correctionWindowDays: j['correction_window_days'] as int?,
-      );
+    id: _req(j, 'id'),
+    name: _req(j, 'name'),
+    obligates: j['obligates'] as bool? ?? false,
+    recurrence: _s(j, 'recurrence'),
+    recordMode: _req(j, 'record_mode'),
+    status: _req(j, 'status'),
+    correctionWindowDays: j['correction_window_days'] as int?,
+  );
 }
 
 class ConsumptionOption {
@@ -121,14 +120,14 @@ class ConsumptionOption {
   final String status;
 
   factory ConsumptionOption.fromJson(Json j) => ConsumptionOption(
-        id: _req(j, 'id'),
-        code: _req(j, 'code'),
-        name: _req(j, 'name'),
-        chargeKind: _req(j, 'charge_kind'),
-        amount: _req(j, 'amount'),
-        currency: _req(j, 'currency'),
-        status: _req(j, 'status'),
-      );
+    id: _req(j, 'id'),
+    code: _req(j, 'code'),
+    name: _req(j, 'name'),
+    chargeKind: _req(j, 'charge_kind'),
+    amount: _req(j, 'amount'),
+    currency: _req(j, 'currency'),
+    status: _req(j, 'status'),
+  );
 }
 
 class ConsumptionRecord {
@@ -159,19 +158,19 @@ class ConsumptionRecord {
   final String recordedAt;
 
   factory ConsumptionRecord.fromJson(Json j) => ConsumptionRecord(
-        id: _req(j, 'id'),
-        typeId: _req(j, 'consumption_type_id'),
-        subjectPersonId: _req(j, 'subject_person_id'),
-        actorPersonId: _req(j, 'actor_person_id'),
-        occurredOn: _req(j, 'occurred_on'),
-        variantCode: _s(j, 'variant_code'),
-        optionCodes: [
-          for (final c in (j['option_codes'] as List? ?? const [])) c as String
-        ],
-        supersedesId: _s(j, 'supersedes_id'),
-        voided: j['voided'] as bool? ?? false,
-        recordedAt: _req(j, 'recorded_at'),
-      );
+    id: _req(j, 'id'),
+    typeId: _req(j, 'consumption_type_id'),
+    subjectPersonId: _req(j, 'subject_person_id'),
+    actorPersonId: _req(j, 'actor_person_id'),
+    occurredOn: _req(j, 'occurred_on'),
+    variantCode: _s(j, 'variant_code'),
+    optionCodes: [
+      for (final c in (j['option_codes'] as List? ?? const [])) c as String,
+    ],
+    supersedesId: _s(j, 'supersedes_id'),
+    voided: j['voided'] as bool? ?? false,
+    recordedAt: _req(j, 'recorded_at'),
+  );
 }
 
 /// One row of the front desk's member list (A3.12).
@@ -193,13 +192,13 @@ class DirectoryEntry {
   final String planId;
 
   factory DirectoryEntry.fromJson(Json j) => DirectoryEntry(
-        membershipId: _req(j, 'membership_id'),
-        personId: _req(j, 'person_id'),
-        displayName: _req(j, 'display_name'),
-        number: _req(j, 'number'),
-        state: _req(j, 'state'),
-        planId: _req(j, 'plan_id'),
-      );
+    membershipId: _req(j, 'membership_id'),
+    personId: _req(j, 'person_id'),
+    displayName: _req(j, 'display_name'),
+    number: _req(j, 'number'),
+    state: _req(j, 'state'),
+    planId: _req(j, 'plan_id'),
+  );
 }
 
 class MembershipPlan {
@@ -218,11 +217,11 @@ class MembershipPlan {
   bool get open => status == 'OPEN';
 
   factory MembershipPlan.fromJson(Json j) => MembershipPlan(
-        id: _req(j, 'id'),
-        code: _req(j, 'code'),
-        name: _req(j, 'name'),
-        status: _req(j, 'status'),
-      );
+    id: _req(j, 'id'),
+    code: _req(j, 'code'),
+    name: _req(j, 'name'),
+    status: _req(j, 'status'),
+  );
 }
 
 class Person {
@@ -249,25 +248,29 @@ class Membership {
   final String state;
 
   factory Membership.fromJson(Json j) => Membership(
-        id: _req(j, 'id'),
-        personId: _req(j, 'person_id'),
-        number: _req(j, 'number'),
-        state: _req(j, 'state'),
-      );
+    id: _req(j, 'id'),
+    personId: _req(j, 'person_id'),
+    number: _req(j, 'number'),
+    state: _req(j, 'state'),
+  );
 }
 
 class Component {
-  const Component(
-      {required this.kind, required this.amount, required this.currency});
+  const Component({
+    required this.kind,
+    required this.amount,
+    required this.currency,
+  });
 
   final String kind;
   final String amount;
   final String currency;
 
   factory Component.fromJson(Json j) => Component(
-      kind: _req(j, 'kind'),
-      amount: _req(j, 'amount'),
-      currency: _req(j, 'currency'));
+    kind: _req(j, 'kind'),
+    amount: _req(j, 'amount'),
+    currency: _req(j, 'currency'),
+  );
 }
 
 class Charge {
@@ -284,14 +287,14 @@ class Charge {
   final List<Component> components;
 
   factory Charge.fromJson(Json j) => Charge(
-        id: _req(j, 'id'),
-        sourceType: _req(j, 'source_type'),
-        description: _s(j, 'description'),
-        components: [
-          for (final c in (j['components'] as List? ?? const []))
-            Component.fromJson(c as Json)
-        ],
-      );
+    id: _req(j, 'id'),
+    sourceType: _req(j, 'source_type'),
+    description: _s(j, 'description'),
+    components: [
+      for (final c in (j['components'] as List? ?? const []))
+        Component.fromJson(c as Json),
+    ],
+  );
 }
 
 class Payment {
@@ -310,12 +313,12 @@ class Payment {
   final String receivedAt;
 
   factory Payment.fromJson(Json j) => Payment(
-        id: _req(j, 'id'),
-        method: _req(j, 'method'),
-        amount: _req(j, 'amount'),
-        currency: _req(j, 'currency'),
-        receivedAt: _req(j, 'received_at'),
-      );
+    id: _req(j, 'id'),
+    method: _req(j, 'method'),
+    amount: _req(j, 'amount'),
+    currency: _req(j, 'currency'),
+    receivedAt: _req(j, 'received_at'),
+  );
 }
 
 /// DRAFT -> ISSUED -> PAID (A3.11). `charges`, `payments` and `balance` are
@@ -352,24 +355,24 @@ class Invoice {
   bool get isPaid => state == 'PAID';
 
   factory Invoice.fromJson(Json j) => Invoice(
-        id: _req(j, 'id'),
-        number: _s(j, 'number'),
-        state: _req(j, 'state'),
-        currency: _req(j, 'currency'),
-        issuedAt: _s(j, 'issued_at'),
-        dueAt: _s(j, 'due_at'),
-        totalAmount: _s(j, 'total_amount'),
-        createdAt: _req(j, 'created_at'),
-        balance: _s(j, 'balance'),
-        charges: [
-          for (final c in (j['charges'] as List? ?? const []))
-            Charge.fromJson(c as Json)
-        ],
-        payments: [
-          for (final p in (j['payments'] as List? ?? const []))
-            Payment.fromJson(p as Json)
-        ],
-      );
+    id: _req(j, 'id'),
+    number: _s(j, 'number'),
+    state: _req(j, 'state'),
+    currency: _req(j, 'currency'),
+    issuedAt: _s(j, 'issued_at'),
+    dueAt: _s(j, 'due_at'),
+    totalAmount: _s(j, 'total_amount'),
+    createdAt: _req(j, 'created_at'),
+    balance: _s(j, 'balance'),
+    charges: [
+      for (final c in (j['charges'] as List? ?? const []))
+        Charge.fromJson(c as Json),
+    ],
+    payments: [
+      for (final p in (j['payments'] as List? ?? const []))
+        Payment.fromJson(p as Json),
+    ],
+  );
 }
 
 /// One person's closed period (A3.10).
@@ -391,13 +394,13 @@ class ClosedPeriod {
   final String? invoiceId;
 
   factory ClosedPeriod.fromJson(Json j) => ClosedPeriod(
-        id: _req(j, 'id'),
-        subjectPersonId: _req(j, 'subject_person_id'),
-        from: _req(j, 'from'),
-        to: _req(j, 'to'),
-        obligatedUnits: j['obligated_units'] as int? ?? 0,
-        invoiceId: _s(j, 'invoice_id'),
-      );
+    id: _req(j, 'id'),
+    subjectPersonId: _req(j, 'subject_person_id'),
+    from: _req(j, 'from'),
+    to: _req(j, 'to'),
+    obligatedUnits: j['obligated_units'] as int? ?? 0,
+    invoiceId: _s(j, 'invoice_id'),
+  );
 }
 
 class Absence {
@@ -414,9 +417,9 @@ class Absence {
   final bool relievesPayment;
 
   factory Absence.fromJson(Json j) => Absence(
-        id: _req(j, 'id'),
-        from: _req(j, 'from'),
-        to: _req(j, 'to'),
-        relievesPayment: j['relieves_payment'] as bool? ?? false,
-      );
+    id: _req(j, 'id'),
+    from: _req(j, 'from'),
+    to: _req(j, 'to'),
+    relievesPayment: j['relieves_payment'] as bool? ?? false,
+  );
 }

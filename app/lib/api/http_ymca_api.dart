@@ -12,8 +12,8 @@ class HttpYmcaApi implements YmcaApi {
     required this.tenantId,
     required this.token,
     http.Client? client,
-  })  : _base = baseUrl.replaceAll(RegExp(r'/+$'), ''),
-        _client = client ?? http.Client();
+  }) : _base = baseUrl.replaceAll(RegExp(r'/+$'), ''),
+       _client = client ?? http.Client();
 
   final String _base;
   final String tenantId;
@@ -23,18 +23,18 @@ class HttpYmcaApi implements YmcaApi {
   Uri _uri(String path, [Map<String, String?> query = const {}]) {
     final q = {
       for (final e in query.entries)
-        if (e.value != null && e.value!.isNotEmpty) e.key: e.value!
+        if (e.value != null && e.value!.isNotEmpty) e.key: e.value!,
     };
     return Uri.parse('$_base/api/v1/t/$tenantId$path')
         .replace(queryParameters: q.isEmpty ? null : q);
   }
 
   Map<String, String> _headers({String? idempotencyKey, bool body = false}) => {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-        if (body) 'Content-Type': 'application/json',
-        'Idempotency-Key': ?idempotencyKey,
-      };
+    'Authorization': 'Bearer $token',
+    'Accept': 'application/json',
+    if (body) 'Content-Type': 'application/json',
+    'Idempotency-Key': ?idempotencyKey,
+  };
 
   Json _decode(http.Response r) {
     final text = utf8.decode(r.bodyBytes);
@@ -50,38 +50,51 @@ class HttpYmcaApi implements YmcaApi {
     );
   }
 
-  Future<Json> _get(String path, [Map<String, String?> query = const {}]) async =>
+  Future<Json> _get(
+    String path, [
+    Map<String, String?> query = const {},
+  ]) async =>
       _decode(await _client.get(_uri(path, query), headers: _headers()));
 
-  Future<Json> _post(String path, Object? body, {String? key}) async =>
-      _decode(await _client.post(_uri(path),
-          headers: _headers(idempotencyKey: key, body: true),
-          body: jsonEncode(body ?? <String, dynamic>{})));
+  Future<Json> _post(String path, Object? body, {String? key}) async => _decode(
+    await _client.post(
+      _uri(path),
+      headers: _headers(idempotencyKey: key, body: true),
+      body: jsonEncode(body ?? <String, dynamic>{}),
+    ),
+  );
 
   @override
   Future<Me> me() async => Me.fromJson(await _get('/me'));
 
   @override
-  Future<Page<ConsumptionType>> myRecordableTypes({String? cursor}) async =>
-      Page.fromJson(await _get('/me/consumption-types', {'cursor': cursor}),
-          ConsumptionType.fromJson);
+  Future<Paged<ConsumptionType>> myRecordableTypes({String? cursor}) async =>
+      Paged.fromJson(
+        await _get('/me/consumption-types', {'cursor': cursor}),
+        ConsumptionType.fromJson,
+      );
 
   @override
-  Future<Page<ConsumptionOption>> options(String typeId,
-          {String? cursor}) async =>
-      Page.fromJson(
-          await _get('/consumption-types/$typeId/options', {'cursor': cursor}),
-          ConsumptionOption.fromJson);
+  Future<Paged<ConsumptionOption>> options(
+    String typeId, {
+    String? cursor,
+  }) async => Paged.fromJson(
+    await _get('/consumption-types/$typeId/options', {'cursor': cursor}),
+    ConsumptionOption.fromJson,
+  );
 
   @override
-  Future<Page<ConsumptionRecord>> myConsumption({String? cursor}) async =>
-      Page.fromJson(await _get('/me/consumption', {'cursor': cursor}),
-          ConsumptionRecord.fromJson);
+  Future<Paged<ConsumptionRecord>> myConsumption({String? cursor}) async =>
+      Paged.fromJson(
+        await _get('/me/consumption', {'cursor': cursor}),
+        ConsumptionRecord.fromJson,
+      );
 
   @override
-  Future<Page<Invoice>> myInvoices({String? cursor}) async =>
-      Page.fromJson(
-          await _get('/me/invoices', {'cursor': cursor}), Invoice.fromJson);
+  Future<Paged<Invoice>> myInvoices({String? cursor}) async => Paged.fromJson(
+    await _get('/me/invoices', {'cursor': cursor}),
+    Invoice.fromJson,
+  );
 
   @override
   Future<Invoice> invoice(String id) async =>
@@ -95,17 +108,14 @@ class HttpYmcaApi implements YmcaApi {
     String? variantCode,
     List<String> optionCodes = const [],
     required String idempotencyKey,
-  }) async =>
-      ConsumptionRecord.fromJson(await _post(
-        '/consumption-types/$typeId/records',
-        {
-          'occurred_on': occurredOn,
-          'subject_person_id': ?subjectPersonId,
-          'variant_code': ?variantCode,
-          if (optionCodes.isNotEmpty) 'option_codes': optionCodes,
-        },
-        key: idempotencyKey,
-      ));
+  }) async => ConsumptionRecord.fromJson(
+    await _post('/consumption-types/$typeId/records', {
+      'occurred_on': occurredOn,
+      'subject_person_id': ?subjectPersonId,
+      'variant_code': ?variantCode,
+      if (optionCodes.isNotEmpty) 'option_codes': optionCodes,
+    }, key: idempotencyKey),
+  );
 
   @override
   Future<ConsumptionRecord> correctRecord(
@@ -114,40 +124,46 @@ class HttpYmcaApi implements YmcaApi {
     String? variantCode,
     List<String> optionCodes = const [],
     required String idempotencyKey,
-  }) async =>
-      ConsumptionRecord.fromJson(await _post(
-        '/consumption-records/$recordId/correction',
-        voidIt
-            ? {'void': true}
-            : {
-                'variant_code': ?variantCode,
-                if (optionCodes.isNotEmpty) 'option_codes': optionCodes,
-              },
-        key: idempotencyKey,
-      ));
+  }) async => ConsumptionRecord.fromJson(
+    await _post(
+      '/consumption-records/$recordId/correction',
+      voidIt
+          ? {'void': true}
+          : {
+              'variant_code': ?variantCode,
+              if (optionCodes.isNotEmpty) 'option_codes': optionCodes,
+            },
+      key: idempotencyKey,
+    ),
+  );
 
   @override
   Future<Absence> declareAbsence({
     required String from,
     required String to,
     String? subjectPersonId,
-  }) async =>
-      Absence.fromJson(await _post('/absences', {
-        'from': from,
-        'to': to,
-        'subject_person_id': ?subjectPersonId,
-      }));
+  }) async => Absence.fromJson(
+    await _post('/absences', {
+      'from': from,
+      'to': to,
+      'subject_person_id': ?subjectPersonId,
+    }),
+  );
 
   @override
-  Future<Page<DirectoryEntry>> directory(
-          {String? query, String? cursor}) async =>
-      Page.fromJson(await _get('/memberships', {'q': query, 'cursor': cursor}),
-          DirectoryEntry.fromJson);
+  Future<Paged<DirectoryEntry>> directory({
+    String? query,
+    String? cursor,
+  }) async => Paged.fromJson(
+    await _get('/memberships', {'q': query, 'cursor': cursor}),
+    DirectoryEntry.fromJson,
+  );
 
   @override
-  Future<Page<MembershipPlan>> plans({String? cursor}) async =>
-      Page.fromJson(await _get('/membership-plans', {'cursor': cursor}),
-          MembershipPlan.fromJson);
+  Future<Paged<MembershipPlan>> plans({String? cursor}) async => Paged.fromJson(
+    await _get('/membership-plans', {'cursor': cursor}),
+    MembershipPlan.fromJson,
+  );
 
   @override
   Future<Person> registerPerson({required String displayName}) async =>
@@ -159,34 +175,37 @@ class HttpYmcaApi implements YmcaApi {
     required String planId,
     required String number,
     required String idempotencyKey,
-  }) async =>
-      Membership.fromJson(await _post(
-        '/memberships',
-        {'person_id': personId, 'plan_id': planId, 'number': number},
-        key: idempotencyKey,
-      ));
+  }) async => Membership.fromJson(
+    await _post('/memberships', {
+      'person_id': personId,
+      'plan_id': planId,
+      'number': number,
+    }, key: idempotencyKey),
+  );
 
   @override
-  Future<Page<ConsumptionType>> consumptionTypes({String? cursor}) async =>
-      Page.fromJson(await _get('/consumption-types', {'cursor': cursor}),
-          ConsumptionType.fromJson);
+  Future<Paged<ConsumptionType>> consumptionTypes({String? cursor}) async =>
+      Paged.fromJson(
+        await _get('/consumption-types', {'cursor': cursor}),
+        ConsumptionType.fromJson,
+      );
 
   @override
-  Future<Page<ConsumptionRecord>> typeRecords(
+  Future<Paged<ConsumptionRecord>> typeRecords(
     String typeId, {
     String? subjectPersonId,
     String? from,
     String? to,
     String? cursor,
-  }) async =>
-      Page.fromJson(
-          await _get('/consumption-types/$typeId/records', {
-            'subject': subjectPersonId,
-            'from': from,
-            'to': to,
-            'cursor': cursor,
-          }),
-          ConsumptionRecord.fromJson);
+  }) async => Paged.fromJson(
+    await _get('/consumption-types/$typeId/records', {
+      'subject': subjectPersonId,
+      'from': from,
+      'to': to,
+      'cursor': cursor,
+    }),
+    ConsumptionRecord.fromJson,
+  );
 
   @override
   Future<List<ClosedPeriod>> closePeriod(
@@ -195,29 +214,34 @@ class HttpYmcaApi implements YmcaApi {
     required String to,
     required String idempotencyKey,
   }) async {
-    final out = await _post('/consumption-types/$typeId/close',
-        {'from': from, 'to': to},
-        key: idempotencyKey);
+    final out = await _post('/consumption-types/$typeId/close', {
+      'from': from,
+      'to': to,
+    }, key: idempotencyKey);
     return [
       for (final c in (out['closed'] as List? ?? const []))
-        ClosedPeriod.fromJson(c as Json)
+        ClosedPeriod.fromJson(c as Json),
     ];
   }
 
   @override
-  Future<Page<Invoice>> invoices({String? cursor}) async =>
-      Page.fromJson(
-          await _get('/invoices', {'cursor': cursor}), Invoice.fromJson);
+  Future<Paged<Invoice>> invoices({String? cursor}) async => Paged.fromJson(
+    await _get('/invoices', {'cursor': cursor}),
+    Invoice.fromJson,
+  );
 
   @override
   Future<Invoice> issueInvoice(
     String id, {
     String? dueAt,
     required String idempotencyKey,
-  }) async =>
-      Invoice.fromJson(await _post('/invoices/$id/issue',
-          dueAt == null ? null : {'due_at': dueAt},
-          key: idempotencyKey));
+  }) async => Invoice.fromJson(
+    await _post(
+      '/invoices/$id/issue',
+      dueAt == null ? null : {'due_at': dueAt},
+      key: idempotencyKey,
+    ),
+  );
 
   @override
   Future<Payment> payInvoice(
@@ -226,10 +250,11 @@ class HttpYmcaApi implements YmcaApi {
     required String amount,
     required String currency,
     required String idempotencyKey,
-  }) async =>
-      Payment.fromJson(await _post(
-        '/invoices/$id/payments',
-        {'method': method, 'amount': amount, 'currency': currency},
-        key: idempotencyKey,
-      ));
+  }) async => Payment.fromJson(
+    await _post('/invoices/$id/payments', {
+      'method': method,
+      'amount': amount,
+      'currency': currency,
+    }, key: idempotencyKey),
+  );
 }

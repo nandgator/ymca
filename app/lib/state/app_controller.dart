@@ -32,10 +32,10 @@ typedef ApiFactory = YmcaApi Function(Session session);
 /// rather than leaving every screen showing the same error.
 class AppController extends ChangeNotifier {
   AppController(this._prefs, {ApiFactory? apiFactory})
-      : _apiFactory = apiFactory ?? _httpFactory;
+    : _apiFactory = apiFactory ?? _httpFactory;
 
-  static YmcaApi _httpFactory(Session s) => HttpYmcaApi(
-      baseUrl: s.baseUrl, tenantId: s.tenantId, token: s.token);
+  static YmcaApi _httpFactory(Session s) =>
+      HttpYmcaApi(baseUrl: s.baseUrl, tenantId: s.tenantId, token: s.token);
 
   final SharedPreferences _prefs;
   final ApiFactory _apiFactory;
@@ -65,8 +65,10 @@ class AppController extends ChangeNotifier {
     final tenant = _prefs.getString(_kTenant);
     final token = _prefs.getString(_kToken);
     if (base == null || tenant == null || token == null) return;
-    await signIn(Session(baseUrl: base, tenantId: tenant, token: token),
-        remember: false);
+    await signIn(
+      Session(baseUrl: base, tenantId: tenant, token: token),
+      remember: false,
+    );
   }
 
   Future<void> signIn(Session session, {bool remember = true}) async {

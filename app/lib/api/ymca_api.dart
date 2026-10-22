@@ -17,25 +17,25 @@ class ApiException implements Exception {
   /// What a person is shown. The server's message is for a developer (A3.4),
   /// so this maps the codes a screen can act on and says nothing else.
   String get userMessage => switch (code) {
-        'unauthenticated' || 'token_expired' => 'Please sign in again.',
-        'forbidden' || 'tenant_mismatch' => "You don't have access to that.",
-        'not_found' => 'That could not be found.',
-        'already_recorded' => 'That day is already recorded. Correct it instead.',
-        'period_closed' => 'That period has already been billed.',
-        'period_already_closed' => 'That period has already been closed.',
-        'consumption_window_closed' =>
-          'That record is too old to correct without extra authority.',
-        'record_mode_not_allowed' =>
-          'This kind of recording is not allowed for that item.',
-        'membership_number_taken' => 'That membership number is already in use.',
-        'already_active_member' => 'That person is already a member.',
-        'no_rate' => 'No price is set for that item yet.',
-        'invoice_wrong_state' => 'That invoice cannot be changed right now.',
-        'payment_exceeds_balance' => 'That is more than is owed.',
-        'currency_mismatch' => 'That currency does not match the invoice.',
-        'invalid_request' => 'Please check what you entered.',
-        _ => 'Something went wrong. Please try again.',
-      };
+    'unauthenticated' || 'token_expired' => 'Please sign in again.',
+    'forbidden' || 'tenant_mismatch' => "You don't have access to that.",
+    'not_found' => 'That could not be found.',
+    'already_recorded' => 'That day is already recorded.',
+    'period_closed' => 'That period has already been billed.',
+    'period_already_closed' => 'That period has already been closed.',
+    'consumption_window_closed' =>
+      'That record is too old to correct without extra authority.',
+    'record_mode_not_allowed' =>
+      'This kind of recording is not allowed for that item.',
+    'membership_number_taken' => 'That membership number is already in use.',
+    'already_active_member' => 'That person is already a member.',
+    'no_rate' => 'No price is set for that item yet.',
+    'invoice_wrong_state' => 'That invoice cannot be changed right now.',
+    'payment_exceeds_balance' => 'That is more than is owed.',
+    'currency_mismatch' => 'That currency does not match the invoice.',
+    'invalid_request' => 'Please check what you entered.',
+    _ => 'Something went wrong. Please try again.',
+  };
 
   @override
   String toString() => 'ApiException($status $code: $message)';
@@ -52,10 +52,10 @@ abstract class YmcaApi {
   Future<Me> me();
 
   // Member reads.
-  Future<Page<ConsumptionType>> myRecordableTypes({String? cursor});
-  Future<Page<ConsumptionOption>> options(String typeId, {String? cursor});
-  Future<Page<ConsumptionRecord>> myConsumption({String? cursor});
-  Future<Page<Invoice>> myInvoices({String? cursor});
+  Future<Paged<ConsumptionType>> myRecordableTypes({String? cursor});
+  Future<Paged<ConsumptionOption>> options(String typeId, {String? cursor});
+  Future<Paged<ConsumptionRecord>> myConsumption({String? cursor});
+  Future<Paged<Invoice>> myInvoices({String? cursor});
   Future<Invoice> invoice(String id);
 
   /// Records one use. [subjectPersonId] null means the caller themselves.
@@ -85,8 +85,8 @@ abstract class YmcaApi {
   });
 
   // Staff reads and writes.
-  Future<Page<DirectoryEntry>> directory({String? query, String? cursor});
-  Future<Page<MembershipPlan>> plans({String? cursor});
+  Future<Paged<DirectoryEntry>> directory({String? query, String? cursor});
+  Future<Paged<MembershipPlan>> plans({String? cursor});
   Future<Person> registerPerson({required String displayName});
   Future<Membership> admit({
     required String personId,
@@ -94,8 +94,8 @@ abstract class YmcaApi {
     required String number,
     required String idempotencyKey,
   });
-  Future<Page<ConsumptionType>> consumptionTypes({String? cursor});
-  Future<Page<ConsumptionRecord>> typeRecords(
+  Future<Paged<ConsumptionType>> consumptionTypes({String? cursor});
+  Future<Paged<ConsumptionRecord>> typeRecords(
     String typeId, {
     String? subjectPersonId,
     String? from,
@@ -110,7 +110,7 @@ abstract class YmcaApi {
   });
 
   // Finance.
-  Future<Page<Invoice>> invoices({String? cursor});
+  Future<Paged<Invoice>> invoices({String? cursor});
   Future<Invoice> issueInvoice(
     String id, {
     String? dueAt,
