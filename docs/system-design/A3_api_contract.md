@@ -121,6 +121,7 @@ The codes every endpoint may emit, and their status:
 409  invoice_wrong_state     the invoice is not in the state this needs
 409  invoice_empty           nothing to issue
 409  payment_exceeds_balance more than is owed
+409  membership_wrong_state  the membership is not in the state this needs (A3.13)
 422  record_mode_not_allowed the type does not take this kind of recording
 500  internal           anything the caller cannot act on
 ```
@@ -931,6 +932,64 @@ A warden who may record for others (`may_record_for_other`, per type) but not
 approve memberships cannot read this list, and the app lets them name a person
 by id instead. A directory scoped to the people a type's staff may record for
 would need a reverse query ADR-104 refuses. Open, 11.2.
+
+---
+
+## A3.13 Membership lifecycle
+
+```txt
+POST /t/{t}/memberships/{m}/suspend     { "reason": "ARREARS" }   check: tenant:admin
+POST /t/{t}/memberships/{m}/reinstate                              check: tenant:admin
+POST /t/{t}/memberships/{m}/terminate                              check: tenant:admin
+    each: Idempotency-Key required (A3.6)  ->  200 the membership
+```
+
+Built when the largest open item in 11.2 was written down: admission wrote
+three grants and nothing could ever take one away, so coverage outlived the
+membership that justified it. 05.3's state machine is:
+
+```txt
+ACTIVE --suspend--> SUSPENDED --reinstate--> ACTIVE
+ACTIVE|SUSPENDED --terminate--> TERMINATED        terminal
+```
+
+`LAPSED` is in the machine and nothing enters it (11.2). Any other transition is
+`409 membership_wrong_state`. A `reason` is one of 05.3's four categories —
+`ARREARS`, `CONDUCT`, `SAFEGUARDING`, `ADMINISTRATIVE` — and is recorded with the
+caller's person and a timestamp in `membership_suspension` (ADR-047). It never
+reaches the authorization store.
+
+### What each one revokes
+
+Suspend and terminate delete **one** tuple, `membership:<m>#covered
+covered_member membership_plan:<p>`, and leave the membership's `tenant` and
+`holder` edges — the membership and its holder remain, which is exactly why
+admission wrote three facts and not one. The delete is synchronous and a failed
+delete rolls the state change back (ADR-118). A grant for the same fact that was
+still pending is voided in the same transaction, so a member suspended before
+the dispatcher ran does not acquire coverage a moment later.
+
+Reinstate re-enqueues the coverage grant. Grants lag (8.3): the member can
+record again after the next dispatch, not at the instant of the response.
+Reinstating can fail with `already_active_member` if the person was admitted
+again while suspended — ADR-043 allows one ACTIVE membership per tenant, and a
+suspension frees the slot.
+
+Terminate also **ends the member's obligations** (A3.10): each obligation
+sourced from the membership stops after today. A suspension does not; arrears
+owe board.
+
+### Terms are checked at decision time
+
+`valid_from` and `valid_until` have been stored and read by nothing. For the
+entitlement-derived permissions — `consumption_type.may_record`,
+`resource.may_use`, `resource.may_book` — a decision allowed to a **person**
+now also requires an ACTIVE membership in the tenant whose term covers today.
+The check is in PostgreSQL, at decision time, with no sweeper (8.7), and is
+audited as a DENY with reason `membership_not_valid`. A principal's own
+authority (`manager`, a role) never depends on membership, and a person's
+standing as an invoice's payer is not an entitlement, so a terminated member
+still reads their bills.
 
 ---
 

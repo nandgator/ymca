@@ -133,6 +133,7 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-115](#adr-115) | The DAG's invariants are enforced by the database, not the caller                            | R11        |
 | [ADR-116](#adr-116) | A period is closed once by a constraint, and the close serialises with the records it counts | R13        |
 | [ADR-117](#adr-117) | Consumption hands off to Finance by a call inside the closing transaction                    | R13        |
+| [ADR-118](#adr-118) | A membership's coverage is revoked synchronously; its term is checked at decision time       | R13        |
 
 ---
 
@@ -2325,3 +2326,40 @@ state in which one has happened without the other.
 that is deliberate rather than convenient: when B6 arrives, it replaces one
 call site. The cost is that a Finance failure fails a Consumption operation;
 for a close, that is the right coupling.
+
+### ADR-118
+
+**A membership's coverage is revoked synchronously; its term is checked at
+decision time** · Accepted · R13
+
+**Decision.** Suspending or terminating a membership deletes its
+`membership#covered covered_member plan` tuple from OpenFGA inside the
+transaction that changes its state, following 8.3's revocation path: take the
+fence lock, mark the state, void any pending row for the fact, delete the tuple
+synchronously, and roll back if the delete fails. Reinstating re-enqueues the
+grant, which may lag. Separately, an entitlement-derived permission
+(`may_record`, `may_use`, `may_book`) allowed to a **person** additionally
+requires, in PostgreSQL at decision time, an ACTIVE membership whose term
+covers today.
+
+**Rationale.** 5.3.9 and 8.3 say removals are synchronous; 5.3.10 said
+suspension is "domain state consulted after the graph answers". Both cannot be
+the whole truth, and only one can be built: the graph returns a boolean and not
+a path, so a post-graph state check cannot know whether an ALLOW came through
+the suspended membership. Deleting the coverage tuple makes the graph itself
+answer correctly, which is what the fence of ADR-101 was built for and what no
+code had yet exercised.
+
+The decision-time check answers a different question. A term that has ended was
+suspended by nobody, and 8.7 forbids a sweeper from noticing. It is also
+defence in depth for the revocation: a membership whose tuple somehow survived
+is still refused. The two layers therefore shadow each other through the API,
+and each is tested where the other cannot reach — the revocation at the graph,
+the term at a membership whose tuple was left in place.
+
+**Consequences.** The check applies to the person subject only. `manager` is a
+principal's and does not depend on membership; a terminated member can still
+read their own bills, because `invoice.payer` is not an entitlement. A commit
+that fails after the delete succeeds leaves a member under-covered, never
+over-covered: the failure is on the safe side and a retry heals it. The state
+machine's `LAPSED` is reserved and unused (11.2).
