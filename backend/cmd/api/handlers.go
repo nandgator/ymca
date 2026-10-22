@@ -22,6 +22,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/authz"
 	"github.com/nandgator/ymca/backend/internal/consumption"
 	"github.com/nandgator/ymca/backend/internal/db"
+	"github.com/nandgator/ymca/backend/internal/finance"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/idempotency"
 	"github.com/nandgator/ymca/backend/internal/membership"
@@ -43,10 +44,35 @@ func authorizeObject(
 	pool *db.DB, fga *authz.FGA, logger *slog.Logger,
 	object authz.Object, relation string,
 ) bool {
+	allowed, proceed := checkObject(w, r, pool, fga, logger, object, relation, "")
+	if !proceed {
+		return false
+	}
+	if !allowed {
+		httpx.WriteError(w, httpx.CodeForbidden, "not permitted")
+		return false
+	}
+	return true
+}
+
+// checkObject is 6.1 for one object, reporting the decision rather than
+// acting on a denial. proceed is false when a response has already been
+// written — a tenant mismatch or a failure of the check itself — and the
+// caller must stop; otherwise allowed is the answer, and what a denial means
+// is the caller's to say. alsoPerson is authz.Request.AlsoAsPerson.
+//
+// authorizeObject is the common case, a denial that is simply a 403.
+// A correction past its window is the other: its denial is a 409 the caller
+// can act on (A3.10), which is why the split exists.
+func checkObject(
+	w http.ResponseWriter, r *http.Request,
+	pool *db.DB, fga *authz.FGA, logger *slog.Logger,
+	object authz.Object, relation, alsoPerson string,
+) (allowed, proceed bool) {
 	principal, ok := httpx.PrincipalFromContext(r.Context())
 	if !ok {
 		httpx.WriteError(w, httpx.CodeInternal, "no principal on request context")
-		return false
+		return false, false
 	}
 
 	allowed, err := authz.Check(r.Context(), pool, fga, authz.Request{
@@ -54,24 +80,22 @@ func authorizeObject(
 		RequestTenantID: r.PathValue("tenant"),
 		Object:          object,
 		Relation:        relation,
+		AlsoAsPerson:    alsoPerson,
 		Action:          object.Type + "." + relation,
 		RequestID:       httpx.RequestIDFromContext(r.Context()),
 	})
 	switch {
 	case errors.Is(err, authz.ErrTenantMismatch):
 		httpx.WriteError(w, httpx.CodeTenantMismatch, "that object is not in this tenant")
-		return false
+		return false, false
 	case err != nil:
 		logger.ErrorContext(r.Context(), "authorization check failed",
 			"error", err, "relation", relation, "object_type", object.Type,
 			"request_id", httpx.RequestIDFromContext(r.Context()))
 		httpx.WriteError(w, httpx.CodeInternal, "authorization check failed")
-		return false
-	case !allowed:
-		httpx.WriteError(w, httpx.CodeForbidden, "not permitted")
-		return false
+		return false, false
 	}
-	return true
+	return allowed, true
 }
 
 // authorizeTenant checks a relation on the tenant named in the path.
@@ -192,6 +216,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 	switch {
 	case errors.Is(err, membership.ErrNotFound),
 		errors.Is(err, consumption.ErrNotFound),
+		errors.Is(err, finance.ErrNotFound),
 		errors.Is(err, organization.ErrNotFound),
 		// Normally unreachable: the `admin` check on the named parent
 		// refuses a parent this tenant cannot see before any row is
@@ -202,6 +227,15 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 	case errors.Is(err, page.ErrInvalidCursor), errors.Is(err, page.ErrInvalidLimit),
 		errors.Is(err, membership.ErrInvalidEntitledType),
 		errors.Is(err, membership.ErrPlanNotOpen),
+		errors.Is(err, consumption.ErrInactiveType),
+		errors.Is(err, consumption.ErrFutureDate),
+		errors.Is(err, consumption.ErrUnknownOption),
+		errors.Is(err, consumption.ErrAlreadyVoided),
+		errors.Is(err, consumption.ErrNotObligating),
+		errors.Is(err, consumption.ErrBadPeriod),
+		errors.Is(err, consumption.ErrNotAMember),
+		errors.Is(err, consumption.ErrInvalidOption),
+		errors.Is(err, finance.ErrInvalid),
 		errors.Is(err, httpx.ErrMissingIdempotencyKey),
 		errors.Is(err, organization.ErrOwnerSubjectTaken),
 		errors.Is(err, organization.ErrInvalidUnitType),
@@ -219,6 +253,34 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		// the first response would silently discard the second request.
 		httpx.WriteError(w, httpx.CodeIdempotencyKeyReused,
 			"that idempotency key was used for a different request")
+	case errors.Is(err, consumption.ErrRecordModeNotAllowed):
+		httpx.WriteError(w, httpx.CodeRecordModeNotAllowed, err.Error())
+	case errors.Is(err, consumption.ErrAlreadyRecorded):
+		httpx.WriteError(w, httpx.CodeAlreadyRecorded, err.Error())
+	case errors.Is(err, consumption.ErrAlreadyCorrected):
+		httpx.WriteError(w, httpx.CodeRecordAlreadyCorrected, err.Error())
+	case errors.Is(err, consumption.ErrWindowClosed):
+		httpx.WriteError(w, httpx.CodeWindowClosed, err.Error())
+	case errors.Is(err, consumption.ErrPeriodClosed):
+		httpx.WriteError(w, httpx.CodePeriodClosed, err.Error())
+	case errors.Is(err, consumption.ErrPeriodAlreadyClosed):
+		httpx.WriteError(w, httpx.CodePeriodAlreadyClosed, err.Error())
+	case errors.Is(err, consumption.ErrObligationOverlaps):
+		httpx.WriteError(w, httpx.CodeObligationOverlaps, err.Error())
+	case errors.Is(err, consumption.ErrOptionCodeTaken):
+		httpx.WriteError(w, httpx.CodeOptionCodeTaken, err.Error())
+	case errors.Is(err, finance.ErrRateOverlaps):
+		httpx.WriteError(w, httpx.CodeRateOverlaps, err.Error())
+	case errors.Is(err, finance.ErrNoRate):
+		httpx.WriteError(w, httpx.CodeNoRate, err.Error())
+	case errors.Is(err, finance.ErrCurrencyMismatch):
+		httpx.WriteError(w, httpx.CodeCurrencyMismatch, err.Error())
+	case errors.Is(err, finance.ErrInvoiceState):
+		httpx.WriteError(w, httpx.CodeInvoiceWrongState, err.Error())
+	case errors.Is(err, finance.ErrInvoiceEmpty):
+		httpx.WriteError(w, httpx.CodeInvoiceEmpty, err.Error())
+	case errors.Is(err, finance.ErrExceedsBalance):
+		httpx.WriteError(w, httpx.CodePaymentExceedsBalance, err.Error())
 	case errors.Is(err, membership.ErrNumberTaken):
 		httpx.WriteError(w, httpx.CodeMembershipNumberTaken, err.Error())
 	case errors.Is(err, membership.ErrAlreadyActiveMember):

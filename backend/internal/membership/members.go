@@ -85,3 +85,20 @@ func ListUnitMembers(
 
 // UnitMemberKey is the sort key ListUnitMembers orders by.
 func UnitMemberKey(m UnitMember) []string { return []string{m.Number} }
+
+// IsActiveMember reports whether a person holds an ACTIVE membership in the
+// tenant. It is a PostgreSQL fact, not a graph check, and it exists for the
+// one caller whose authority is "I am a member": declaring one's own absence
+// (A3.10), where no relation on any object means that.
+func IsActiveMember(ctx context.Context, tx pgx.Tx, tenantID, personID string) (bool, error) {
+	var held bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1 FROM membership
+		     WHERE tenant_id = $1 AND person_id = $2::uuid AND state = 'ACTIVE')
+	`, tenantID, personID).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("membership: read active membership: %w", err)
+	}
+	return held, nil
+}

@@ -25,6 +25,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/authz"
 	"github.com/nandgator/ymca/backend/internal/config"
 	"github.com/nandgator/ymca/backend/internal/db"
+	"github.com/nandgator/ymca/backend/internal/finance"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
 	"github.com/nandgator/ymca/backend/internal/organization"
@@ -110,10 +111,61 @@ func serve(logger *slog.Logger) error {
 		dispatcher.Run(ctx)
 	}()
 
+	mux := http.NewServeMux()
+	registerRoutes(mux, pool, fga, logger)
+
+	handler := httpx.Chain(mux,
+		httpx.Recover(logger),
+		httpx.RequestID(),
+		httpx.Logging(logger),
+		httpx.Authenticate(authenticator, logger),
+	)
+
+	srv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("api: listening", "addr", cfg.HTTPAddr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		logger.Info("api: shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := srv.Shutdown(shutdownCtx)
+		// Run returns on ctx cancellation. Waiting for it means an in-flight
+		// dispatch finishes its transaction rather than being cut off between
+		// the OpenFGA write and the row's dispatched_at, which would leave
+		// the row pending and redeliver a tuple that is already there —
+		// harmless, but only because WriteTuples tolerates redelivery.
+		<-dispatcherDone
+		return err
+	case err := <-errCh:
+		return err
+	}
+}
+
+// registerRoutes wires every route the API serves onto mux.
+//
+// It is a function, and not inline in run, so that the integration tests mount
+// the SAME routes the binary does. Each older test registers the handful it
+// exercises by hand, which is how a route can exist in main and be tested
+// nowhere; the harness for A3.10 and A3.11 does not repeat that.
+func registerRoutes(mux *http.ServeMux, pool *db.DB, fga *authz.FGA, logger *slog.Logger) {
 	// TenantMatch is applied per route, not around the mux: ServeMux only
 	// populates r.PathValue while resolving a specific route, so a
 	// middleware wrapping the mux would see an empty tenant (ADR-105).
-	mux := http.NewServeMux()
 	tenantRoute := func(pattern string, h http.HandlerFunc) {
 		mux.Handle(pattern, httpx.TenantMatch(pool, logger)(h))
 	}
@@ -165,46 +217,26 @@ func serve(logger *slog.Logger) error {
 	tenantRoute("POST /api/v1/t/{tenant}/memberships",
 		handleAdmitMember(pool, fga, logger))
 
-	handler := httpx.Chain(mux,
-		httpx.Recover(logger),
-		httpx.RequestID(),
-		httpx.Logging(logger),
-		httpx.Authenticate(authenticator, logger),
-	)
-
-	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Info("api: listening", "addr", cfg.HTTPAddr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		logger.Info("api: shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := srv.Shutdown(shutdownCtx)
-		// Run returns on ctx cancellation. Waiting for it means an in-flight
-		// dispatch finishes its transaction rather than being cut off between
-		// the OpenFGA write and the row's dispatched_at, which would leave
-		// the row pending and redeliver a tuple that is already there —
-		// harmless, but only because WriteTuples tolerates redelivery.
-		<-dispatcherDone
-		return err
-	case err := <-errCh:
-		return err
-	}
+	// A3.10 consumption and A3.11 finance. Recording, correcting and closing
+	// are idempotent (A3.6); invoices are not created here at all — they
+	// begin in the close, which is Finance's only publisher.
+	const t = "/api/v1/t/{tenant}"
+	tenantRoute("POST "+t+"/consumption-types/{type}/options", handleCreateOption(pool, fga, logger))
+	tenantRoute("GET "+t+"/consumption-types/{type}/options", handleListOptions(pool, fga, logger))
+	tenantRoute("POST "+t+"/consumption-types/{type}/obligations", handleCreateObligation(pool, fga, logger))
+	tenantRoute("POST "+t+"/consumption-types/{type}/records", handleRecord(pool, fga, logger))
+	tenantRoute("GET "+t+"/consumption-types/{type}/records", handleListRecords(pool, fga, logger))
+	tenantRoute("POST "+t+"/consumption-records/{record}/correction", handleCorrection(pool, fga, logger))
+	tenantRoute("POST "+t+"/absences", handleDeclareAbsence(pool, fga, logger))
+	tenantRoute("POST "+t+"/absences/{absence}/withdraw", handleWithdrawAbsence(pool, fga, logger))
+	tenantRoute("POST "+t+"/consumption-types/{type}/close", handleClosePeriod(pool, fga, logger))
+	tenantRoute("POST "+t+"/consumption-types/{type}/rates", handleCreateRate(pool, fga, logger))
+	tenantRoute("GET "+t+"/invoices", handleListInvoices(pool, fga, logger))
+	tenantRoute("GET "+t+"/invoices/{invoice}", handleGetInvoice(pool, fga, logger))
+	tenantRoute("POST "+t+"/invoices/{invoice}/issue", handleIssueInvoice(pool, fga, logger))
+	tenantRoute("POST "+t+"/invoices/{invoice}/payments", handlePayInvoice(pool, fga, logger))
+	tenantRoute("GET "+t+"/me/consumption", handleMeConsumption(pool, logger))
+	tenantRoute("GET "+t+"/me/invoices", handleMeInvoices(pool, logger))
 }
 
 // outboxRenderers maps an event type to the tuples the CURRENT model wants
@@ -217,6 +249,7 @@ func outboxRenderers() map[string]outbox.Renderer {
 	for _, set := range []map[string]outbox.Renderer{
 		membership.Renderers(),
 		organization.Renderers(),
+		finance.Renderers(),
 	} {
 		for event, render := range set {
 			if _, dup := all[event]; dup {

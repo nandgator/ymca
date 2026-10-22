@@ -27,6 +27,23 @@ const (
 	CodeMembershipNumberTaken Code = "membership_number_taken"
 	CodeAlreadyActiveMember   Code = "already_active_member"
 	CodeInternal              Code = "internal"
+
+	// A3.10 and A3.11. Each is a state the caller can act on, which is the
+	// reason none of them is a bare `conflict`.
+	CodeAlreadyRecorded        Code = "already_recorded"
+	CodeRecordAlreadyCorrected Code = "record_already_corrected"
+	CodeWindowClosed           Code = "consumption_window_closed"
+	CodePeriodClosed           Code = "period_closed"
+	CodePeriodAlreadyClosed    Code = "period_already_closed"
+	CodeObligationOverlaps     Code = "obligation_overlaps"
+	CodeOptionCodeTaken        Code = "option_code_taken"
+	CodeRateOverlaps           Code = "rate_overlaps"
+	CodeNoRate                 Code = "no_rate"
+	CodeCurrencyMismatch       Code = "currency_mismatch"
+	CodeInvoiceWrongState      Code = "invoice_wrong_state"
+	CodeInvoiceEmpty           Code = "invoice_empty"
+	CodePaymentExceedsBalance  Code = "payment_exceeds_balance"
+	CodeRecordModeNotAllowed   Code = "record_mode_not_allowed"
 )
 
 // httpStatus is D7's HTTP status for each code. tenant_mismatch and
@@ -43,6 +60,21 @@ var httpStatus = map[Code]int{
 	CodeMembershipNumberTaken: http.StatusConflict,
 	CodeAlreadyActiveMember:   http.StatusConflict,
 	CodeInternal:              http.StatusInternalServerError,
+
+	CodeAlreadyRecorded:        http.StatusConflict,
+	CodeRecordAlreadyCorrected: http.StatusConflict,
+	CodeWindowClosed:           http.StatusConflict,
+	CodePeriodClosed:           http.StatusConflict,
+	CodePeriodAlreadyClosed:    http.StatusConflict,
+	CodeObligationOverlaps:     http.StatusConflict,
+	CodeOptionCodeTaken:        http.StatusConflict,
+	CodeRateOverlaps:           http.StatusConflict,
+	CodeNoRate:                 http.StatusConflict,
+	CodeCurrencyMismatch:       http.StatusConflict,
+	CodeInvoiceWrongState:      http.StatusConflict,
+	CodeInvoiceEmpty:           http.StatusConflict,
+	CodePaymentExceedsBalance:  http.StatusConflict,
+	CodeRecordModeNotAllowed:   http.StatusUnprocessableEntity,
 }
 
 type errorBody struct {

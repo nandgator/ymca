@@ -200,6 +200,9 @@ func handleCreateConsumptionType(pool *db.DB, fga *authz.FGA, logger *slog.Logge
 			Obligates  bool    `json:"obligates"`
 			Recurrence *string `json:"recurrence"`
 			RecordMode string  `json:"record_mode"`
+			// 05.10.7: how many days a correction may be filed after the
+			// day it corrects, before it needs may_correct_late.
+			CorrectionWindowDays *int `json:"correction_window_days"`
 		}
 		if !readBody(w, r, &body) {
 			return
@@ -217,6 +220,8 @@ func handleCreateConsumptionType(pool *db.DB, fga *authz.FGA, logger *slog.Logge
 				Obligates:  body.Obligates,
 				Recurrence: body.Recurrence,
 				RecordMode: body.RecordMode,
+
+				CorrectionWindowDays: body.CorrectionWindowDays,
 			})
 			return err
 		})

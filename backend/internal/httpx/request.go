@@ -36,6 +36,20 @@ var ErrBodyTooLarge = errors.New("httpx: request body too large")
 // otherwise have it silently ignored and get a successful response for a
 // request the server did not perform.
 func ReadJSON(r *http.Request, v any) ([]byte, error) {
+	return readJSON(r, v, false)
+}
+
+// ReadOptionalJSON is ReadJSON for an endpoint whose body may be omitted
+// altogether — issuing an invoice takes an optional due date, and a client
+// with nothing to say should be able to say nothing. An empty body leaves v
+// at its zero value and yields empty raw bytes, so the idempotency digest is
+// over exactly what was sent, which was nothing. A body that is present is
+// held to ReadJSON's standard in full.
+func ReadOptionalJSON(r *http.Request, v any) ([]byte, error) {
+	return readJSON(r, v, true)
+}
+
+func readJSON(r *http.Request, v any, optional bool) ([]byte, error) {
 	limited := http.MaxBytesReader(nil, r.Body, MaxBodyBytes)
 	raw, err := io.ReadAll(limited)
 	if err != nil {
@@ -46,6 +60,9 @@ func ReadJSON(r *http.Request, v any) ([]byte, error) {
 		return nil, fmt.Errorf("httpx: read body: %w", err)
 	}
 
+	if optional && len(bytes.TrimSpace(raw)) == 0 {
+		return raw, nil
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

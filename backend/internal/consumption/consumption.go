@@ -30,6 +30,9 @@ type Type struct {
 	Recurrence *string `json:"recurrence"`
 	RecordMode string  `json:"record_mode"`
 	Status     string  `json:"status"`
+	// CorrectionWindowDays bounds how late a correction may be filed
+	// (05.10.7); nil means no limit.
+	CorrectionWindowDays *int `json:"correction_window_days"`
 }
 
 // CreateType defines a consumption type and queues its tenant edge.
@@ -40,6 +43,9 @@ type Type struct {
 // configured. The database enforces it; this is where the caller's error
 // becomes a 400 instead of a constraint violation.
 func CreateType(ctx context.Context, tx pgx.Tx, tenantID string, t Type) (Type, error) {
+	if t.CorrectionWindowDays != nil && *t.CorrectionWindowDays < 0 {
+		return Type{}, fmt.Errorf("consumption: correction_window_days cannot be negative")
+	}
 	if t.Obligates && (t.Recurrence == nil || *t.Recurrence == "") {
 		return Type{}, fmt.Errorf(
 			"consumption: a type that obligates must declare a recurrence (A2.9, ADR-097)")
@@ -48,11 +54,15 @@ func CreateType(ctx context.Context, tx pgx.Tx, tenantID string, t Type) (Type, 
 	var out Type
 	err := tx.QueryRow(ctx, `
 		INSERT INTO consumption_type
-		    (id, tenant_id, name, obligates, recurrence, record_mode, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'ACTIVE')
-		RETURNING id::text, name, obligates, recurrence, record_mode, status
-	`, tenantID, t.Name, t.Obligates, t.Recurrence, t.RecordMode).
-		Scan(&out.ID, &out.Name, &out.Obligates, &out.Recurrence, &out.RecordMode, &out.Status)
+		    (id, tenant_id, name, obligates, recurrence, record_mode, status,
+		     correction_window)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'ACTIVE',
+		        CASE WHEN $6::int IS NULL THEN NULL ELSE make_interval(days => $6::int) END)
+		RETURNING id::text, name, obligates, recurrence, record_mode, status,
+		          EXTRACT(day FROM correction_window)::int
+	`, tenantID, t.Name, t.Obligates, t.Recurrence, t.RecordMode, t.CorrectionWindowDays).
+		Scan(&out.ID, &out.Name, &out.Obligates, &out.Recurrence, &out.RecordMode,
+			&out.Status, &out.CorrectionWindowDays)
 	if err != nil {
 		return Type{}, fmt.Errorf("consumption: create type: %w", err)
 	}
@@ -81,7 +91,8 @@ func ListTypes(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) (
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, name, obligates, recurrence, record_mode, status
+		SELECT id::text, name, obligates, recurrence, record_mode, status,
+		       EXTRACT(day FROM correction_window)::int
 		  FROM consumption_type
 		 WHERE tenant_id = $1
 		   AND ($2 = '' OR (name, id::text) > ($2, $3))
@@ -97,7 +108,7 @@ func ListTypes(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) (
 	for rows.Next() {
 		var t Type
 		if err := rows.Scan(&t.ID, &t.Name, &t.Obligates, &t.Recurrence,
-			&t.RecordMode, &t.Status); err != nil {
+			&t.RecordMode, &t.Status, &t.CorrectionWindowDays); err != nil {
 			return nil, fmt.Errorf("consumption: scan type: %w", err)
 		}
 		out = append(out, t)

@@ -58,6 +58,39 @@ func WriteDeny(ctx context.Context, tx pgx.Tx, tenantID string, ev DenyEvent) er
 	return nil
 }
 
+// NotableEvent is the input to WriteNotable: an ALLOWED action that 8.5 wants
+// on the trail anyway, because the permission that allowed it is one a
+// reviewer will ask about later — a correction filed after its window
+// (05.10.7) is the first.
+type NotableEvent struct {
+	ActorPrincipalID string
+	Action           string
+	ObjectType       string
+	ObjectID         string
+	Detail           string
+	RequestID        string
+}
+
+// WriteNotable inserts one audit_event row with outcome ALLOWED and severity
+// NOTABLE, using tx, so that the row commits with the action it records.
+// The same tenant-context requirement as WriteDeny applies.
+func WriteNotable(ctx context.Context, tx pgx.Tx, tenantID string, ev NotableEvent) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO audit_event
+		    (tenant_id, actor_principal_id, action, object_type, object_id,
+		     outcome, severity, context)
+		VALUES
+		    ($1, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, '')::uuid,
+		     'ALLOWED', 'NOTABLE',
+		     jsonb_build_object('request_id', $6::text, 'detail', $7::text))
+	`, tenantID, ev.ActorPrincipalID, ev.Action, ev.ObjectType, ev.ObjectID,
+		ev.RequestID, ev.Detail)
+	if err != nil {
+		return fmt.Errorf("audit: write notable event: %w", err)
+	}
+	return nil
+}
+
 // execer is the minimum this package needs to write a row: both pgx.Tx and
 // *pgxpool.Pool satisfy it already.
 //

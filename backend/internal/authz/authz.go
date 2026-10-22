@@ -52,6 +52,15 @@ type Request struct {
 	// rows against it, so Object.Type and Relation together decide which
 	// assignments can possibly apply.
 	Relation string
+	// AlsoAsPerson, when set, is a person id the graph is ALSO asked about,
+	// as "person:<id>", and either subject suffices (A3.10).
+	//
+	// Entitlement is a property of a person — a membership covers a human
+	// (ADR-107) — while `manager` and the role-grantable permissions are
+	// properties of a principal. A relation like consumption_type.may_record
+	// is reachable both ways, so a check naming one subject denies either
+	// the member or the owner. The DENY is audited once, when both refuse.
+	AlsoAsPerson string
 	// Action and RequestID are audit context for a DENY (8.5, D9).
 	Action    string
 	RequestID string
@@ -111,9 +120,22 @@ func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, e
 
 		// Step 3 — the OpenFGA graph, against the pinned model id (fga.go),
 		// given step 2's tuples and no others.
-		ok, err := fga.Check(ctx, user, req.Relation, object, contextual)
-		if err != nil {
-			return fmt.Errorf("authz: graph step: %w", err)
+		users := []string{user}
+		if req.AlsoAsPerson != "" {
+			// The person first: the common caller of an entitlement check
+			// is a member, and the principal-only path is the exception.
+			users = []string{"person:" + req.AlsoAsPerson, user}
+		}
+		ok := false
+		for _, u := range users {
+			var err error
+			ok, err = fga.Check(ctx, u, req.Relation, object, contextual)
+			if err != nil {
+				return fmt.Errorf("authz: graph step: %w", err)
+			}
+			if ok {
+				break
+			}
 		}
 		if !ok {
 			return writeDeny(ctx, tx, req, "graph")
