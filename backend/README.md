@@ -17,6 +17,8 @@ migrations/0003_idempotency.sql  A3.6's store, which A2 had never defined
 migrations/0004_platform.sql     platform audit, may_register_person, org_unit_id
 migrations/0005_authorization_edge_invariants.sql
                            ADR-016's three invariants, as a trigger (ADR-115)
+migrations/0006_consumption.sql  voided, once-only supersede, period close, rates
+migrations/0007_finance.sql      invoice order, one draft per payer, party keys
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)
@@ -29,6 +31,11 @@ cmd/api/                   the HTTP server, /me, configuration, platform,
                            people, units and admission
 cmd/api/handlers.go        the 6.1 check, A3.4's error mapping, body decoding,
                            and A3.6's flow around one operation
+cmd/api/consumption_handlers.go  A3.10 — and the one place Consumption meets
+                           Finance (ADR-117)
+cmd/api/finance_handlers.go      A3.11
+cmd/api/harness_integration_test.go  the shared setup: production routes
+                           (registerRoutes), a tenant, and a cleanup that proves it
 internal/config/           environment configuration
 internal/db/               the pool, and the tenant transaction (8.2)
 internal/auth/             the ADR-106 port and its provider registry
@@ -44,23 +51,25 @@ internal/membership/       bundles, plans, and their outbox renderers
 internal/membership/admission.go ADR-107 — a member who may actually do something
 internal/membership/members.go   ADR-104's unit member list
 internal/identity/         people — global rows, tenant-gated (ADR-114)
-internal/consumption/      consumption types (05.10)
+internal/consumption/      types, options, obligations, records, corrections,
+                           absences and the period close (05.10, A3.10)
+internal/finance/          rates, invoices, issue (ADR-103), payments, and the
+                           charge a closed period composes (A3.11)
 internal/organization/     tenants and their first owner (ADR-113)
 internal/organization/units.go   units and the DAG edges (ADR-016, ADR-115)
 internal/httpx/            the middleware chain, A3.4's errors
 ```
 
-## What §6 of the handoff planned and does not exist yet
+## What the handoff planned and does not exist yet
 
 ```txt
 compose.yaml     not needed — postgres and openfga already run under podman
 Dockerfile       not needed until there is something to deploy
-finance/                                     the rest of 8.3
 ```
 
-`membership/`, `consumption/`, `organization/` and `identity/` now exist, and
-admission with them. Consumption records and the finance endpoints are still
-unwritten; see the handoff §8 for the order and what to read first.
+Step 8.3 is complete: configuration, organization, admission, consumption and
+finance are all reachable through the API, from a cold tenant to a paid
+invoice. What the design deliberately leaves out is in `11.2`.
 
 ---
 
@@ -120,7 +129,7 @@ podman exec postgres psql -U pgadmin -d postgres \
 
 ```sh
 go run ./cmd/fga apply      # write the model to a durable store
-go run ./cmd/fga test       # throwaway store, fixture, 40 assertions
+go run ./cmd/fga test       # throwaway store, fixture, 47 assertions
 ```
 
 `fga test` is the CI command. It creates its own store, applies the model,
@@ -135,7 +144,7 @@ go run ./cmd/api                 # serve on YMCA_HTTP_ADDR
 ```
 
 `GET /api/v1/t/{tenant}/me` (`A3.7`, `A3.9`) reports who the caller is and
-which of five tenant-scoped permissions they hold. Each is a full 6.1 check
+which of seven tenant-scoped permissions they hold. Each is a full 6.1 check
 against the tenant named in the path — the endpoint reports no object-scoped
 permission, deliberately, because a `/me` that enumerated them would be the
 reverse index `ADR-104` and `8.11` exist to prevent. Beside it are A3.7's
@@ -150,6 +159,38 @@ GET  /api/v1/t/{t}/units/{unit}/members member_read on the unit  ADR-104
 POST /api/v1/t/{t}/memberships          may_approve_membership   ADR-107
                                         + Idempotency-Key, required
 ```
+
+Consumption and money (`A3.10`, `A3.11`, `A3.12`):
+
+```txt
+POST /t/{t}/consumption-types/{ct}/options       manager on the type
+POST /t/{t}/consumption-types/{ct}/obligations   manager on the type
+POST /t/{t}/consumption-types/{ct}/records       may_record (person OR principal)
+                                                 / may_record_for_other, + the
+                                                 SUBJECT's own may_record
+                                                 + Idempotency-Key
+POST /t/{t}/consumption-records/{r}/correction   may_correct [+ may_correct_late]
+POST /t/{t}/absences                             own: an ACTIVE membership
+                                                 other: tenant admin
+POST /t/{t}/consumption-types/{ct}/close         may_close_period + Idempotency-Key
+                                                 -> composes the invoice, in the
+                                                 same transaction (ADR-117)
+POST /t/{t}/consumption-types/{ct}/rates         finance_manager
+GET  /t/{t}/invoices                             finance_reader   (scope)
+GET  /t/{t}/invoices/{i}                         viewer, as person AND principal
+POST /t/{t}/invoices/{i}/issue                   finance_manager + Idempotency-Key
+POST /t/{t}/invoices/{i}/payments                finance_manager + Idempotency-Key
+GET  /t/{t}/me/consumption                       own records, by identity
+GET  /t/{t}/me/invoices                          own invoices, drafts excluded
+GET  /t/{t}/me/consumption-types                 what I may record (visibility)
+GET  /t/{t}/memberships?q=                       the member directory
+```
+
+**Two things about these are easy to get wrong.** Invoices are not created by
+an endpoint: a closed period composes onto the payer's open draft, so closing
+a new period before issuing the last invoice appends to it. And an invoice's
+authorization facts are grants, so a draft is unreadable — even to the
+administrator — until the dispatcher runs.
 
 `POST /units` writes the unit row and its `authorization_edge` in one
 transaction. The edge is **not** derived from `org_parent_id` and never may
@@ -370,6 +411,57 @@ with a logged 500 — the honest answer for a server-side mistake — and the te
 asserts the message names the header. A check that has only ever been observed
 to pass is indistinguishable from one that cannot fail, in the small as well
 as the large.
+
+### Consumption to cash
+
+`TestConsumption_RecordingAndCorrection`, `TestBilling_FromObligationToPaidInvoice`
+and their neighbours (`consumption_`, `billing_`, `close_`, `directory_`
+`_integration_test.go`) drive a whole hostel through the production routes.
+What they pin, and not merely observe:
+
+```txt
+a retry is the same meal; a different body on the same key is its own 409
+one key against two TYPES is two requests      the type is in the key's scope
+a second live record for a day is already_recorded, not a second record
+staff cannot bill a person who is not entitled  person is global (A2.1)
+a correction supersedes; a void is revivable; a record is superseded once
+a correction past its window needs may_correct_late, and is audited NOTABLE
+obligated units follow the recurrence          20 = 30 days - 10 relieved
+a withdrawn absence relieves nothing; a short one relieves recording only
+a period closes exactly once                   an exclusion constraint
+a closed period takes no record and no correction
+no rate rolls the whole close back             and the period stays open
+issue numbers an invoice and returns the number on rollback   ADR-103
+a payment never exceeds the balance; a retried payment is not a second
+reading money is not writing it                finance_reader is not finance_manager
+a payer is not shown a draft
+```
+
+**Every guard was broken on purpose and failed for its own reason.** Two were
+shadowed and needed a second test to be seen at all: the late-correction guard
+in the domain is answered identically by the handler's pre-check, so the API
+test cannot tell which is missing; `Correct` is called directly to reach it.
+And the first draft of the assertion for `admin from tenant` passed with the
+path removed, because the type it named hangs under a unit the admin already
+administers through the DAG — it now names a type with no `auth_parent`, as
+every type created through the API is.
+
+`TestClose_WaitsForTheSubjectLock` holds the (type, subject) lock in one
+transaction and asserts the close does not finish. Removing the lock from the
+close made it fail correctly — and then hang for ten minutes, because the
+failing test left the holder's transaction open and `pool.Close` waits for
+every connection. The holder is now released in a cleanup.
+
+`TestFlutterClientAgreesWithTheServer` is the cross-language guard. It boots
+the real routes, seeds a draft, a part-paid and a paid invoice, and runs
+`app/test/live_api_test.dart` against them. The widget tests use a fake that
+agrees with the client by construction, so only this catches a model reading a
+key the server does not write. It found two real defects the first time it
+ran: the front desk could not read the plans it admits onto, and a front desk
+holding `may_approve_membership` could not register the person it was
+admitting. Both fixed; `/me` now reports `may_register_person` so the app can
+show a button that works. It skips, loudly, without `flutter` on `PATH`, and
+CI sets `YMCA_REQUIRE_FLUTTER` so it cannot skip there.
 
 ---
 

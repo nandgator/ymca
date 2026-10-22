@@ -214,4 +214,12 @@ func TestMe_ReportsFinanceManager(t *testing.T) {
 	if has(alice.tok) {
 		t.Error("a plain member is reported as finance_manager")
 	}
+	out := h.must(h.adminTok, "GET", "/me", nil, http.StatusOK)
+	var registers bool
+	for _, p := range out["permissions"].([]any) {
+		registers = registers || p == "tenant:may_register_person"
+	}
+	if !registers {
+		t.Error("the tenant admin is not reported as may_register_person")
+	}
 }

@@ -958,19 +958,22 @@ Present in the design, absent from the API until something needs them.
 }
 ```
 
-`permissions` is exactly six candidates, each a full 6.1 check against the
+`permissions` is exactly seven candidates, each a full 6.1 check against the
 tenant object named in the path: `tenant:admin`, `tenant:member`,
 `tenant:finance_reader`, `tenant:finance_manager`,
-`tenant:safeguarding_reader` and `tenant:may_approve_membership`. Six checks,
-fixed, whatever the tenant contains; only the ones that pass are listed.
-`finance_manager` joined with A3.11: the client must show or hide
-issue-and-pay on it, exactly as it does admission on
-`may_approve_membership`.
+`tenant:safeguarding_reader`, `tenant:may_approve_membership` and
+`tenant:may_register_person`. Seven checks, fixed, whatever the tenant
+contains; only the ones that pass are listed. `finance_manager` joined with
+A3.11: the client must show or hide issue-and-pay on it, exactly as it does
+admission on `may_approve_membership`. `may_register_person` joined with the
+app (A3.12): admitting a stranger is two acts — registering the person
+(ADR-114) and admitting them — held by two relations, and a front desk with
+one and not the other should be shown a button that works.
 
 `may_approve_membership` joined the set with ADR-110. It is tenant-scoped and
 role-grantable, and 8.3's admission endpoint is the first thing the client
-must show or hide on it — which is exactly what this endpoint is for. Four of
-the six now resolve through a role as readily as through a direct grant, and
+must show or hide on it — which is exactly what this endpoint is for. Five of
+the seven now resolve through a role as readily as through a direct grant, and
 the response says nothing about which: the client is told what it may do, not
 how it came to be allowed.
 

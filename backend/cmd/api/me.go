@@ -12,7 +12,7 @@ import (
 	"github.com/nandgator/ymca/backend/internal/httpx"
 )
 
-// tenantPermissions is D6's candidate set (A3.9): exactly six, each a full
+// tenantPermissions is D6's candidate set (A3.9): exactly seven, each a full
 // authz.Check against the tenant object named in the path. Only the ones
 // that pass are reported. This is not a general-purpose scan of every
 // relation the tenant type declares — 05.1's FGA model separately grants
@@ -26,7 +26,7 @@ import (
 // it came to be allowed.
 var tenantPermissions = []string{
 	"admin", "member", "finance_reader", "finance_manager", "safeguarding_reader",
-	"may_approve_membership",
+	"may_approve_membership", "may_register_person",
 }
 
 type meResponse struct {

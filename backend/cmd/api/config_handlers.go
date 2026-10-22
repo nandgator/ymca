@@ -164,9 +164,12 @@ func handleCreatePlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.Han
 	}
 }
 
+// handleListPlans is checked as may_approve_membership, not tenant admin: the
+// front desk must read the plans it admits onto, and admin holds the relation
+// anyway (A3.12). Creating a plan stays an administrator's act.
 func handleListPlans(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authorizeTenant(w, r, pool, fga, logger, configurePermission) {
+		if !authorizeTenant(w, r, pool, fga, logger, admitPermission) {
 			return
 		}
 		params, err := httpx.PageParams(r)

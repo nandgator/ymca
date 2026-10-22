@@ -287,6 +287,25 @@ func (h *harness) purge() {
 			`DELETE FROM authorization_outbox WHERE aggregate_id = ANY($1::uuid[])`, aggregates)
 	}
 
+	// People created through the API (POST /people) belong to nobody the
+	// harness made, but are reachable through this tenant's memberships.
+	var strays []string
+	_ = h.pool.InTenantTx(bg, h.tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(bg, `SELECT person_id::text FROM membership WHERE tenant_id = $1`, h.tenantID)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				strays = append(strays, id)
+			}
+		}
+		return nil
+	})
+	h.persons = append(h.persons, strays...)
+
 	_ = h.pool.InTenantTx(bg, h.tenantID, func(tx pgx.Tx) error {
 		for _, q := range []string{
 			`DELETE FROM consumption_record_option WHERE consumption_record_id IN

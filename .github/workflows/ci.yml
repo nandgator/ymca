@@ -1,0 +1,136 @@
+# CI for the YMCA platform (07.5). Three jobs, four classes of check:
+#
+#   docs      markdown formatting and lint                 (the design record)
+#   backend   build, vet, gofmt, unit, FGA model + assertions, and the
+#             integration suite against REAL PostgreSQL and OpenFGA
+#   app       flutter analyze + the widget tests
+#
+# The integration tests FAIL rather than skip when their environment is
+# missing, which is the only way their guarantees survive a CI runner. They run
+# with `-p 1`, twice: the outbox dispatcher drains the whole table by design,
+# so two packages running dispatchers against one cluster steal each other's
+# rows, and a second run is what exposes a test that poisons the next one.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Formatting is clean
+        run: bunx prettier --check 'docs/**/*.md' 'backend/README.md'
+      - name: Lint
+        run: bunx markdownlint-cli2 'docs/**/*.md' 'backend/README.md'
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: pgadmin
+          POSTGRES_PASSWORD: ci-superuser
+          POSTGRES_DB: ymca
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pgadmin -d ymca"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SUPERUSER_URL: postgres://pgadmin:ci-superuser@localhost:5432/ymca?sslmode=disable
+      YMCA_FGA_API_URL: http://localhost:8080
+      YMCA_AUTH_PROVIDER: dev
+      YMCA_DEV_AUTH_SECRET: ci-dev-secret-at-least-32-bytes-long
+      # The Dart half of the contract test must RUN here, not skip.
+      YMCA_REQUIRE_FLUTTER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Start OpenFGA
+        # In-memory datastore: the model, the assertions and the dispatcher
+        # need an OpenFGA, not a durable one. A service container cannot
+        # override the command, so it is started here.
+        run: |
+          docker run -d --name openfga -p 8080:8080 openfga/openfga run
+          for i in $(seq 1 30); do
+            curl -sf localhost:8080/healthz && break || sleep 1
+          done
+          curl -sf localhost:8080/healthz
+
+      - name: Build, vet, format
+        run: |
+          go build ./... && go vet ./...
+          go build -tags dev ./... && go vet -tags dev ./...
+          go vet -tags 'integration dev' ./...
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Unit tests, the A1.8 sync guards, and the no-dev-authenticator check (ADR-106)
+        run: go test ./...
+
+      - name: Migrate as the superuser, then create the application's login role
+        run: |
+          YMCA_DATABASE_URL="$SUPERUSER_URL" go run ./cmd/migrate up
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE ymca_api LOGIN PASSWORD 'ci-api' IN ROLE ymca_app"
+          YMCA_DATABASE_URL="$SUPERUSER_URL" go run ./cmd/migrate status
+
+      - name: Apply the model, then run its assertions
+        run: |
+          out=$(go run ./cmd/fga apply)
+          echo "$out"
+          echo "YMCA_FGA_STORE_ID=$(echo "$out" | sed -n 's/^store //p')" >> "$GITHUB_ENV"
+          echo "YMCA_FGA_MODEL_ID=$(echo "$out" | sed -n 's/^model //p')" >> "$GITHUB_ENV"
+          go run ./cmd/fga test
+
+      - name: Integration tests, twice
+        env:
+          YMCA_DATABASE_URL: postgres://ymca_api:ci-api@localhost:5432/ymca?sslmode=disable
+        run: |
+          for run in 1 2; do
+            echo "::group::integration run $run"
+            go test -count=1 -tags 'integration dev' -p 1 ./...
+            echo "::endgroup::"
+          done
+
+      - name: The suite leaves nothing pending
+        run: |
+          n=$(psql "$SUPERUSER_URL" -tAc "SELECT count(*) FROM authorization_outbox WHERE dispatched_at IS NULL AND voided_at IS NULL")
+          echo "pending outbox rows: $n"
+          test "$n" = "0"
+
+  app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - name: Widget tests (the live-API test skips here; the backend job runs it)
+        run: flutter test

@@ -48,6 +48,7 @@ class Me {
 
   bool get isAdmin => can('tenant:admin');
   bool get canAdmit => can('tenant:may_approve_membership');
+  bool get canRegisterPerson => can('tenant:may_register_person');
   bool get canReadFinance => can('tenant:finance_reader');
   bool get canManageFinance => can('tenant:finance_manager');
 
