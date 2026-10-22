@@ -194,6 +194,34 @@ class FakeYmcaApi implements YmcaApi {
   }
 
   @override
+  Future<Membership> suspendMembership(
+    String id, {
+    required String reason,
+    required String idempotencyKey,
+  }) async {
+    _record('suspendMembership id=$id reason=$reason key=$idempotencyKey');
+    return Membership(id: id, personId: 'p', number: 'n', state: 'SUSPENDED');
+  }
+
+  @override
+  Future<Membership> reinstateMembership(
+    String id, {
+    required String idempotencyKey,
+  }) async {
+    _record('reinstateMembership id=$id key=$idempotencyKey');
+    return Membership(id: id, personId: 'p', number: 'n', state: 'ACTIVE');
+  }
+
+  @override
+  Future<Membership> terminateMembership(
+    String id, {
+    required String idempotencyKey,
+  }) async {
+    _record('terminateMembership id=$id key=$idempotencyKey');
+    return Membership(id: id, personId: 'p', number: 'n', state: 'TERMINATED');
+  }
+
+  @override
   Future<Paged<ConsumptionType>> consumptionTypes({String? cursor}) async {
     _record('consumptionTypes');
     return _page(typeList);

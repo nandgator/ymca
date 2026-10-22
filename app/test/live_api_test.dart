@@ -289,4 +289,69 @@ void main() {
       ),
     );
   });
+
+  test('suspend, reinstate and terminate go through, in order', () async {
+    final m = _env('YMCA_CAROL_MEMBERSHIP')!;
+    final suspended = await admin.suspendMembership(
+      m,
+      reason: 'ARREARS',
+      idempotencyKey: newIdempotencyKey(),
+    );
+    expect(suspended.state, 'SUSPENDED');
+
+    final listed = await desk.directory(query: 'carol');
+    expect(listed.items.single.state, 'SUSPENDED');
+
+    await expectLater(
+      admin.suspendMembership(
+        m,
+        reason: 'CONDUCT',
+        idempotencyKey: newIdempotencyKey(),
+      ),
+      throwsA(
+        isA<ApiException>()
+            .having((e) => e.code, 'code', 'membership_wrong_state')
+            .having((e) => e.status, 'status', 409),
+      ),
+    );
+
+    final back = await admin.reinstateMembership(
+      m,
+      idempotencyKey: newIdempotencyKey(),
+    );
+    expect(back.state, 'ACTIVE');
+
+    final key = newIdempotencyKey();
+    final ended = await admin.terminateMembership(m, idempotencyKey: key);
+    expect(ended.state, 'TERMINATED');
+    final replay = await admin.terminateMembership(m, idempotencyKey: key);
+    expect(
+      replay.state,
+      'TERMINATED',
+      reason: 'a retried terminate is a replay',
+    );
+    await expectLater(
+      admin.terminateMembership(m, idempotencyKey: newIdempotencyKey()),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.code,
+          'code',
+          'membership_wrong_state',
+        ),
+      ),
+    );
+  });
+
+  test('only an administrator may change a membership', () async {
+    await expectLater(
+      desk.suspendMembership(
+        _env('YMCA_CAROL_MEMBERSHIP')!,
+        reason: 'ARREARS',
+        idempotencyKey: newIdempotencyKey(),
+      ),
+      throwsA(
+        isA<ApiException>().having((e) => e.forbidden, 'forbidden', isTrue),
+      ),
+    );
+  });
 }

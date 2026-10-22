@@ -30,6 +30,8 @@ class ApiException implements Exception {
     'membership_number_taken' => 'That membership number is already in use.',
     'already_active_member' => 'That person is already a member.',
     'no_rate' => 'No price is set for that item yet.',
+    'membership_wrong_state' =>
+      'That membership cannot be changed that way right now.',
     'invoice_wrong_state' => 'That invoice cannot be changed right now.',
     'payment_exceeds_balance' => 'That is more than is owed.',
     'currency_mismatch' => 'That currency does not match the invoice.',
@@ -106,6 +108,22 @@ abstract class YmcaApi {
     String typeId, {
     required String from,
     required String to,
+    required String idempotencyKey,
+  });
+
+  // Membership lifecycle (A3.13). Suspending and terminating revoke coverage
+  // on the server before they answer; reinstating re-grants, which may lag.
+  Future<Membership> suspendMembership(
+    String id, {
+    required String reason,
+    required String idempotencyKey,
+  });
+  Future<Membership> reinstateMembership(
+    String id, {
+    required String idempotencyKey,
+  });
+  Future<Membership> terminateMembership(
+    String id, {
     required String idempotencyKey,
   });
 

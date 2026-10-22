@@ -184,6 +184,33 @@ class HttpYmcaApi implements YmcaApi {
   );
 
   @override
+  Future<Membership> suspendMembership(
+    String id, {
+    required String reason,
+    required String idempotencyKey,
+  }) async => Membership.fromJson(
+    await _post('/memberships/$id/suspend', {
+      'reason': reason,
+    }, key: idempotencyKey),
+  );
+
+  @override
+  Future<Membership> reinstateMembership(
+    String id, {
+    required String idempotencyKey,
+  }) async => Membership.fromJson(
+    await _post('/memberships/$id/reinstate', null, key: idempotencyKey),
+  );
+
+  @override
+  Future<Membership> terminateMembership(
+    String id, {
+    required String idempotencyKey,
+  }) async => Membership.fromJson(
+    await _post('/memberships/$id/terminate', null, key: idempotencyKey),
+  );
+
+  @override
   Future<Paged<ConsumptionType>> consumptionTypes({String? cursor}) async =>
       Paged.fromJson(
         await _get('/consumption-types', {'cursor': cursor}),

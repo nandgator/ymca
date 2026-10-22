@@ -39,6 +39,7 @@ func TestFlutterClientAgreesWithTheServer(t *testing.T) {
 	breakfast := hs.addType(map[string]any{"name": "Breakfast"})
 	alice := hs.admit(1, "alice")
 	bob := hs.admit(2, "bob")
+	carol := hs.admit(4, "carol") // the lifecycle test's member
 	desk := hs.staff(3, "desk")
 	h.grant("principal:"+desk.princ, "may_approve_membership", "tenant:"+h.tenantID)
 	h.grant("principal:"+desk.princ, "may_register_person", "tenant:"+h.tenantID)
@@ -122,6 +123,7 @@ func TestFlutterClientAgreesWithTheServer(t *testing.T) {
 		"YMCA_ALICE_TOKEN="+alice.tok,
 		"YMCA_DESK_TOKEN="+desk.tok,
 		"YMCA_ALICE_PERSON="+alice.person,
+		"YMCA_CAROL_MEMBERSHIP="+carol.membership,
 		"YMCA_DINNER_ID="+dinner,
 		"YMCA_BREAKFAST_ID="+breakfast,
 		"YMCA_INV_ISSUED="+issued,

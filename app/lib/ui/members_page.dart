@@ -7,6 +7,7 @@ import '../api/models.dart' as models;
 import '../api/ymca_api.dart';
 import '../state/app_controller.dart';
 import 'admit_member_page.dart';
+import 'membership_actions.dart';
 import 'record_for_member_sheet.dart';
 
 class MembersPage extends StatefulWidget {
@@ -209,37 +210,18 @@ class _MembersPageState extends State<MembersPage> {
     );
   }
 
-  void _showMemberSheet(models.DirectoryEntry member) {
-    // The page's context, not the sheet's: the sheet is popped before the
-    // next one opens, and a popped sheet's context is not one to build on.
-    final pageContext = context;
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => Wrap(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  member.displayName,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 16),
-                ListTile(
-                  key: const Key('record-for-member'),
-                  title: const Text('Record a meal'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    showRecordForMemberSheet(pageContext, member);
-                  },
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+  // The page's context, not a sheet's: the sheet pops before the next
+  // surface opens, and a popped sheet's context is not one to build on.
+  Future<void> _showMemberSheet(models.DirectoryEntry member) async {
+    final result = await showMemberSheet(context, member);
+    if (!mounted) return;
+    switch (result) {
+      case MemberSheetResult.recordMeal:
+        await showRecordForMemberSheet(context, member);
+      case MemberSheetResult.changed:
+        await _reload();
+      case null:
+        break;
+    }
   }
 }
