@@ -96,3 +96,39 @@ func CreateObligation(
 	o.EffectiveUntil = in.EffectiveUntil
 	return o, nil
 }
+
+// EndObligationsFor stops every obligation sourced from one relationship after
+// today (UTC), which is how an obligation ends: "created and ended by the
+// source relationship, never by a clock" (05.10.4). Today's own unit is kept —
+// a member terminated at noon has still been owed dinner that evening.
+//
+// Obligations already ended earlier are left alone. It returns how many it
+// shortened.
+func EndObligationsFor(
+	ctx context.Context, tx pgx.Tx, tenantID, sourceType, sourceID string,
+) (int64, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE consumption_obligation
+		   SET effective = tstzrange(
+		           lower(effective),
+		           (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC')
+		 WHERE tenant_id = $1 AND source_type = $2 AND source_id = $3::uuid
+		   AND (upper_inf(effective)
+		        OR upper(effective) > (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC')
+		   AND lower(effective) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC'
+	`, tenantID, sourceType, sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("consumption: end obligations: %w", err)
+	}
+	// An obligation that had not begun cannot be shortened to an empty range,
+	// and it must not begin after the relationship is over: it is removed.
+	gone, err := tx.Exec(ctx, `
+		DELETE FROM consumption_obligation
+		 WHERE tenant_id = $1 AND source_type = $2 AND source_id = $3::uuid
+		   AND lower(effective) >= (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC'
+	`, tenantID, sourceType, sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("consumption: remove unstarted obligations: %w", err)
+	}
+	return tag.RowsAffected() + gone.RowsAffected(), nil
+}

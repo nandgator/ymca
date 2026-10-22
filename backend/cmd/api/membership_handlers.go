@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/nandgator/ymca/backend/internal/authz"
+	"github.com/nandgator/ymca/backend/internal/consumption"
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
 	"github.com/nandgator/ymca/backend/internal/membership"
@@ -129,4 +130,74 @@ func handleListDirectory(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.
 		}
 		httpx.WriteJSON(w, http.StatusOK, page.Of(rows, params, membership.DirectoryKey))
 	}
+}
+
+// handleMembershipTransition builds the three state-change endpoints, which
+// share everything but the domain call: an admin check, an idempotency key
+// (a retry after a lost 200 must get the answer, not membership_wrong_state),
+// and one transaction in which the state, the revocation and the key commit
+// together.
+func handleMembershipTransition(
+	pool *db.DB, fga *authz.FGA, logger *slog.Logger, verb string,
+	act func(ctx context.Context, tx pgx.Tx, tenantID, id, reason, actorPerson string) (membership.Membership, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeTenant(w, r, pool, fga, logger, "admin") {
+			return
+		}
+		actor, ok := callerPerson(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		raw, err := httpx.ReadOptionalJSON(r, &body)
+		if err != nil {
+			httpx.WriteError(w, httpx.CodeInvalidRequest, "request body could not be read as JSON")
+			return
+		}
+		id := r.PathValue("membership")
+		key, err := httpx.IdempotencyKey(r, "POST /t/{t}/memberships/"+id+"/"+verb, raw)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		tenantID := r.PathValue("tenant")
+		runIdempotent(w, r, pool, logger, key, http.StatusOK,
+			func(ctx context.Context, tx pgx.Tx) (any, error) {
+				return act(ctx, tx, tenantID, id, body.Reason, actor)
+			})
+	}
+}
+
+func handleSuspendMembership(pool *db.DB, fga *authz.FGA, rev membership.Revoker, logger *slog.Logger) http.HandlerFunc {
+	return handleMembershipTransition(pool, fga, logger, "suspend",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, reason, actor string) (membership.Membership, error) {
+			return membership.Suspend(ctx, tx, tenantID, id, reason, actor, rev)
+		})
+}
+
+func handleReinstateMembership(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return handleMembershipTransition(pool, fga, logger, "reinstate",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, _, _ string) (membership.Membership, error) {
+			return membership.Reinstate(ctx, tx, tenantID, id)
+		})
+}
+
+// handleTerminateMembership is where membership meets consumption: ending a
+// membership ends the obligations it sourced (A3.13). The handler is the only
+// place the two contexts meet, as with the close and Finance (ADR-117).
+func handleTerminateMembership(pool *db.DB, fga *authz.FGA, rev membership.Revoker, logger *slog.Logger) http.HandlerFunc {
+	return handleMembershipTransition(pool, fga, logger, "terminate",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, _, _ string) (membership.Membership, error) {
+			m, err := membership.Terminate(ctx, tx, tenantID, id, rev)
+			if err != nil {
+				return membership.Membership{}, err
+			}
+			if _, err := consumption.EndObligationsFor(ctx, tx, tenantID, "MEMBERSHIP", id); err != nil {
+				return membership.Membership{}, err
+			}
+			return m, nil
+		})
 }

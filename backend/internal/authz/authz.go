@@ -126,7 +126,7 @@ func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, e
 			// is a member, and the principal-only path is the exception.
 			users = []string{"person:" + req.AlsoAsPerson, user}
 		}
-		ok := false
+		ok, allowedBy := false, ""
 		for _, u := range users {
 			var err error
 			ok, err = fga.Check(ctx, u, req.Relation, object, contextual)
@@ -134,11 +134,28 @@ func Check(ctx context.Context, database *db.DB, fga *FGA, req Request) (bool, e
 				return fmt.Errorf("authz: graph step: %w", err)
 			}
 			if ok {
+				allowedBy = u
 				break
 			}
 		}
 		if !ok {
 			return writeDeny(ctx, tx, req, "graph")
+		}
+
+		// Step 3b — an ALLOW that came through a PERSON on an entitlement
+		// permission came through a membership, and a membership has a state
+		// and a term the graph does not hold (ADR-118, A3.13). Only the person
+		// route is checked: a principal's own authority — manager, a role —
+		// does not depend on being a member, and a person's standing as an
+		// invoice's payer is not an entitlement at all.
+		if allowedBy == "person:"+req.AlsoAsPerson && entitlementPermissions[req.Permission()] {
+			valid, err := hasValidMembership(ctx, tx, req.RequestTenantID, req.AlsoAsPerson)
+			if err != nil {
+				return fmt.Errorf("authz: membership term: %w", err)
+			}
+			if !valid {
+				return writeDeny(ctx, tx, req, "membership_not_valid")
+			}
 		}
 
 		// Step 4 — what remains (validity.go): principal and person status,
@@ -170,4 +187,28 @@ func writeDeny(ctx context.Context, tx pgx.Tx, req Request, reason string) error
 		Reason:           reason,
 		RequestID:        req.RequestID,
 	})
+}
+
+// entitlementPermissions are the permissions a person holds by being covered
+// by a membership (ADR-107), and so the only ones whose ALLOW depends on the
+// membership still being in force.
+var entitlementPermissions = map[string]bool{
+	"consumption_type.may_record": true,
+	"resource.may_use":            true,
+	"resource.may_book":           true,
+}
+
+// hasValidMembership is the decision-time term check: an ACTIVE membership in
+// this tenant whose term covers today. In PostgreSQL, with no sweeper — 8.7
+// forbids one noticing that a term ended, and A1.5 puts term windows here.
+func hasValidMembership(ctx context.Context, tx pgx.Tx, tenantID, personID string) (bool, error) {
+	var valid bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1 FROM membership
+		     WHERE tenant_id = $1 AND person_id = $2::uuid AND state = 'ACTIVE'
+		       AND (valid_from IS NULL OR valid_from <= (now() AT TIME ZONE 'UTC')::date)
+		       AND (valid_until IS NULL OR valid_until >= (now() AT TIME ZONE 'UTC')::date))
+	`, tenantID, personID).Scan(&valid)
+	return valid, err
 }

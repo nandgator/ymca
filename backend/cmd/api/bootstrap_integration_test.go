@@ -114,7 +114,7 @@ func TestBootstrap_FromNothingToAProvisionedTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	registerRoutes(mux, pool, fga, logger)
+	registerRoutes(mux, pool, fga, writer, logger)
 	srv := httptest.NewServer(httpx.Chain(mux, httpx.Recover(logger), httpx.RequestID(),
 		httpx.Logging(logger), httpx.Authenticate(authenticator, logger)))
 	defer srv.Close()

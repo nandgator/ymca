@@ -172,6 +172,9 @@ POST /api/v1/t/{t}/memberships          may_approve_membership   ADR-107
 Consumption and money (`A3.10`, `A3.11`, `A3.12`):
 
 ```txt
+POST /t/{t}/memberships/{m}/suspend|reinstate|terminate
+                                                 tenant admin + Idempotency-Key
+                                                 -> revokes coverage, synchronously
 POST /t/{t}/consumption-types/{ct}/options       manager on the type
 POST /t/{t}/consumption-types/{ct}/obligations   manager on the type
 POST /t/{t}/consumption-types/{ct}/records       may_record (person OR principal)
@@ -462,6 +465,28 @@ a payment never exceeds the balance; a retried payment is not a second
 reading money is not writing it                finance_reader is not finance_manager
 a payer is not shown a draft
 ```
+
+`TestMembership_*` runs 8.3's revocation path for the first time:
+
+```txt
+suspend deletes the covered tuple AT THE GRAPH, with no dispatch in between
+the membership and its holder survive; a suspended member still reads bills
+reinstate restores coverage after the next dispatch, and not before
+suspending before the dispatcher ran leaves a VOIDED row and nothing to grant
+a revocation that cannot be performed is a 500 that says so, and changes nothing
+terminate ends the obligations after today, and is terminal
+a term that ended entitles nobody, with the tuple still in place
+a principal's own authority does not depend on membership
+```
+
+Revocation is asserted **at the graph** (`fga.Check`, no API), because through
+the API the decision-time term check answers first and would hide a tuple that
+was never deleted — the two layers shadow each other, so each is tested where
+the other cannot reach. The cleanup learned something here too: a fact granted
+twice (admitted, then reinstated) has two dispatched rows for one tuple, OpenFGA
+refuses a delete batch naming a tuple twice, and the old cleanup passed the
+batch whole, failed, ignored the failure and leaked the administrator into the
+next run. It now de-duplicates and reads back to prove the tuples are gone.
 
 **Every guard was broken on purpose and failed for its own reason.** Two were
 shadowed and needed a second test to be seen at all: the late-correction guard

@@ -112,7 +112,7 @@ func serve(logger *slog.Logger) error {
 	}()
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, pool, fga, logger)
+	registerRoutes(mux, pool, fga, fgaWriter, logger)
 
 	handler := httpx.Chain(mux,
 		// Outermost: a preflight carries no credential and is answered before
@@ -165,7 +165,9 @@ func serve(logger *slog.Logger) error {
 // the SAME routes the binary does. Each older test registers the handful it
 // exercises by hand, which is how a route can exist in main and be tested
 // nowhere; the harness for A3.10 and A3.11 does not repeat that.
-func registerRoutes(mux *http.ServeMux, pool *db.DB, fga *authz.FGA, logger *slog.Logger) {
+func registerRoutes(
+	mux *http.ServeMux, pool *db.DB, fga *authz.FGA, rev membership.Revoker, logger *slog.Logger,
+) {
 	// TenantMatch is applied per route, not around the mux: ServeMux only
 	// populates r.PathValue while resolving a specific route, so a
 	// middleware wrapping the mux would see an empty tenant (ADR-105).
@@ -224,6 +226,9 @@ func registerRoutes(mux *http.ServeMux, pool *db.DB, fga *authz.FGA, logger *slo
 	// are idempotent (A3.6); invoices are not created here at all — they
 	// begin in the close, which is Finance's only publisher.
 	const t = "/api/v1/t/{tenant}"
+	tenantRoute("POST "+t+"/memberships/{membership}/suspend", handleSuspendMembership(pool, fga, rev, logger))
+	tenantRoute("POST "+t+"/memberships/{membership}/reinstate", handleReinstateMembership(pool, fga, logger))
+	tenantRoute("POST "+t+"/memberships/{membership}/terminate", handleTerminateMembership(pool, fga, rev, logger))
 	tenantRoute("POST "+t+"/consumption-types/{type}/options", handleCreateOption(pool, fga, logger))
 	tenantRoute("GET "+t+"/consumption-types/{type}/options", handleListOptions(pool, fga, logger))
 	tenantRoute("POST "+t+"/consumption-types/{type}/obligations", handleCreateObligation(pool, fga, logger))

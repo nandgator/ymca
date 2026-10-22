@@ -99,7 +99,7 @@ func newHarness(t *testing.T, n int) *harness {
 		t.Fatalf("auth.Open(dev): %v", err)
 	}
 	mux := http.NewServeMux()
-	registerRoutes(mux, pool, fga, logger)
+	registerRoutes(mux, pool, fga, writer, logger)
 	h.srv = httptest.NewServer(httpx.Chain(mux,
 		httpx.Recover(logger), httpx.RequestID(), httpx.Logging(logger),
 		httpx.Authenticate(authenticator, logger)))
@@ -278,8 +278,33 @@ func (h *harness) purge() {
 		}
 	}
 	tuples = append(tuples, h.granted...)
+	// De-duplicated: a fact granted twice (admitted, suspended, reinstated)
+	// has two dispatched rows for one tuple, and OpenFGA refuses a delete batch
+	// naming one tuple twice. The first version of this cleanup passed that
+	// batch whole, failed, ignored the failure, and leaked the tenant's
+	// administrator into the next run.
+	seen := map[outbox.Tuple]bool{}
+	unique := tuples[:0]
+	for _, tp := range tuples {
+		if !seen[tp] {
+			seen[tp] = true
+			unique = append(unique, tp)
+		}
+	}
+	tuples = unique
 	if len(tuples) > 0 {
-		_ = h.writer.DeleteTuples(bg, tuples)
+		if err := h.writer.DeleteTuples(bg, tuples); err != nil {
+			h.t.Errorf("cleanup could not delete %d tuples: %v", len(tuples), err)
+		}
+		// The proof, as for the outbox below: nothing it deleted is still there.
+		for _, tp := range tuples {
+			user, relation, object := tp.User, tp.Relation, tp.Object
+			resp, err := h.fgaRaw.Read(bg).Body(client.ClientReadRequest{
+				User: &user, Relation: &relation, Object: &object}).Execute()
+			if err == nil && len(resp.GetTuples()) > 0 {
+				h.t.Errorf("cleanup left the tuple %s %s %s in OpenFGA", tp.User, tp.Relation, tp.Object)
+			}
+		}
 	}
 	h.granted = nil
 	if len(aggregates) > 0 {
@@ -323,6 +348,8 @@ func (h *harness) purge() {
 			`DELETE FROM invoice WHERE tenant_id = $1`,
 			`DELETE FROM invoice_number_series WHERE tenant_id = $1`,
 			`DELETE FROM idempotency_key WHERE tenant_id = $1`,
+			`DELETE FROM membership_suspension WHERE membership_id IN
+			   (SELECT id FROM membership WHERE tenant_id = $1)`,
 			`DELETE FROM membership WHERE tenant_id = $1`,
 			`DELETE FROM membership_plan WHERE tenant_id = $1`,
 			`DELETE FROM consumption_type WHERE tenant_id = $1`,
@@ -369,4 +396,18 @@ func (h *harness) count(sql string, args ...any) int {
 		h.t.Fatalf("count: %v", err)
 	}
 	return n
+}
+
+// tx runs statements inside the tenant's transaction, for a test that has to
+// change a row the API gives no way to change (a term, for instance).
+func (h *harness) tx(fn func(q func(string, ...any))) error {
+	return h.pool.InTenantTx(h.ctx, h.tenantID, func(tx pgx.Tx) error {
+		var failed error
+		fn(func(sql string, args ...any) {
+			if _, err := tx.Exec(h.ctx, sql, args...); err != nil && failed == nil {
+				failed = err
+			}
+		})
+		return failed
+	})
 }

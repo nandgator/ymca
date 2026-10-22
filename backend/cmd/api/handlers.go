@@ -227,6 +227,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 	case errors.Is(err, page.ErrInvalidCursor), errors.Is(err, page.ErrInvalidLimit),
 		errors.Is(err, membership.ErrInvalidEntitledType),
 		errors.Is(err, membership.ErrPlanNotOpen),
+		errors.Is(err, membership.ErrInvalidReason),
 		errors.Is(err, consumption.ErrInactiveType),
 		errors.Is(err, consumption.ErrFutureDate),
 		errors.Is(err, consumption.ErrUnknownOption),
@@ -281,6 +282,15 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		httpx.WriteError(w, httpx.CodeInvoiceEmpty, err.Error())
 	case errors.Is(err, finance.ErrExceedsBalance):
 		httpx.WriteError(w, httpx.CodePaymentExceedsBalance, err.Error())
+	case errors.Is(err, membership.ErrWrongState):
+		httpx.WriteError(w, httpx.CodeMembershipWrongState, err.Error())
+	case errors.Is(err, membership.ErrRevocationFailed):
+		// Not a bare "internal error": the caller must be told that the
+		// revocation did not happen and that nothing changed (8.3).
+		logger.ErrorContext(r.Context(), "revocation failed",
+			"error", err, "request_id", httpx.RequestIDFromContext(r.Context()))
+		httpx.WriteError(w, httpx.CodeInternal,
+			"the revocation did not happen and nothing was changed; retry")
 	case errors.Is(err, membership.ErrNumberTaken):
 		httpx.WriteError(w, httpx.CodeMembershipNumberTaken, err.Error())
 	case errors.Is(err, membership.ErrAlreadyActiveMember):

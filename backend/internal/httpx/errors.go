@@ -44,6 +44,7 @@ const (
 	CodeInvoiceEmpty           Code = "invoice_empty"
 	CodePaymentExceedsBalance  Code = "payment_exceeds_balance"
 	CodeRecordModeNotAllowed   Code = "record_mode_not_allowed"
+	CodeMembershipWrongState   Code = "membership_wrong_state"
 )
 
 // httpStatus is D7's HTTP status for each code. tenant_mismatch and
@@ -75,6 +76,7 @@ var httpStatus = map[Code]int{
 	CodeInvoiceEmpty:           http.StatusConflict,
 	CodePaymentExceedsBalance:  http.StatusConflict,
 	CodeRecordModeNotAllowed:   http.StatusUnprocessableEntity,
+	CodeMembershipWrongState:   http.StatusConflict,
 }
 
 type errorBody struct {

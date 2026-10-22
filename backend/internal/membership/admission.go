@@ -35,10 +35,8 @@ import (
 // (ADR-101): a suspension lifts coverage while the membership and its holder
 // remain, and one fact fencing all three tuples could not express that.
 //
-// 08's list of operations requiring synchronous revocation includes
-// "membership suspended / lapsed / terminated". No endpoint in this slice
-// changes a membership's state, so nothing revokes these yet — the facts are
-// shaped for that path rather than pretending it exists.
+// lifecycle.go (A3.13) is what revokes the third of them, and reinstating
+// re-enqueues it under the same fence — which is why the event type is shared.
 const (
 	EventMembershipAdmitted = "MembershipAdmitted"
 	EventMembershipHeldBy   = "MembershipHeldBy"
