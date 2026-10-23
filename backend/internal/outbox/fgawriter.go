@@ -115,3 +115,38 @@ func (w *FGAWriter) DeleteTuples(ctx context.Context, tuples []Tuple) error {
 	}
 	return nil
 }
+
+// Has reports whether a tuple exists in the store. It is the read half the
+// reconciler needs (internal/membership), exported so the writer can be handed
+// to it as an Inspector.
+func (w *FGAWriter) Has(ctx context.Context, t Tuple) (bool, error) {
+	return w.exists(ctx, t)
+}
+
+// ObjectsOf lists the objects of one type that user holds relation on, by
+// reading the store rather than evaluating a check: it answers "which tuples
+// are written", which is what drift is about, and not "what is allowed".
+func (w *FGAWriter) ObjectsOf(ctx context.Context, user, relation, objectType string) ([]string, error) {
+	var out []string
+	object := objectType + ":"
+	var token string
+	for {
+		req := w.client.Read(ctx).Body(client.ClientReadRequest{
+			User: &user, Relation: &relation, Object: &object,
+		})
+		if token != "" {
+			req = req.Options(client.ClientReadOptions{ContinuationToken: &token})
+		}
+		resp, err := req.Execute()
+		if err != nil {
+			return nil, fmt.Errorf("outbox: read %s %s %s*: %w", user, relation, objectType, err)
+		}
+		for _, t := range resp.GetTuples() {
+			out = append(out, t.Key.Object)
+		}
+		token = resp.GetContinuationToken()
+		if token == "" {
+			return out, nil
+		}
+	}
+}

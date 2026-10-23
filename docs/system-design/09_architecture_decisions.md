@@ -137,6 +137,7 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-119](#adr-119) | "Today" is the tenant's: a zone on the tenant, and one place that turns an instant into a day | R14        |
 | [ADR-120](#adr-120) | An issued invoice is corrected by a credit note with its own number; the balance is derived   | R14        |
 | [ADR-121](#adr-121) | A plan is closed, replaced and retired, never edited; a holder moves one membership at a time | R14        |
+| [ADR-122](#adr-122) | PostgreSQL and the graph are compared by a command that reports first and repairs on request  | R14        |
 
 ---
 
@@ -2485,3 +2486,39 @@ same lag reinstating has. `OPEN` is the only state that admits, and `DRAFT`
 remains unreachable (plans are created `OPEN`). The share lock on admission is
 the mechanism that stops a retire overtaking an admission; it is not tested
 under concurrency.
+
+---
+
+### ADR-122
+
+**PostgreSQL and the graph are compared by a command that reports first and
+repairs on request** · Accepted · R14
+
+**Decision.** `api reconcile-coverage [--repair]` walks every tenant's
+memberships and compares them with OpenFGA. It reports two kinds of
+disagreement, one JSON line each. **MISSING**: an `ACTIVE` membership lacks a
+tuple its row implies (the tenant edge, the holder, the coverage of its current
+plan) and the outbox holds no pending row for it. **UNEXPECTED**: the graph
+covers a membership that is not `ACTIVE`, or covers it on a plan other than its
+own. Without `--repair` it changes nothing and exits non-zero while any
+disagreement stands, so a scheduler can alert on it. With `--repair` it
+re-queues what is missing through the outbox and revokes what should not exist
+on ADR-118's path (lock the fence, void a pending row, delete synchronously,
+roll the tenant's transaction back if the delete fails), and exits non-zero
+only if a repair could not be made.
+
+**Rationale.** ADR-118 accepts that a commit failing after a synchronous delete
+leaves a member under-covered until someone retries, and a dispatch that never
+ran leaves a grant missing; both are the safe direction, and nothing looked for
+them. The other direction, coverage the database says is gone, is a standing
+authority nobody revoked, and no path found it. Reporting is the default
+because a repair is itself an authorization change: an operator sees what would
+move before it does.
+
+**Consequences.** A grant waiting in the outbox is the lag ADR-101 accepts and
+is not reported. The comparison starts from PostgreSQL's memberships, so a tuple
+for a membership row that no longer exists is not found. Only the three
+membership facts are covered; role assignments are resolved per check and never
+stored (ADR-109), and the other granted facts (units, plans, bundles, invoices)
+have no comparison yet (11.2). Void on repair closes the race with a grant in
+flight, and is not tested under concurrency.

@@ -337,6 +337,19 @@ person is refused rather than moved, because moving a login would hand over
 everything the first person held. Like `bootstrap-operator` it is not behind the
 dev tag.
 
+**The two stores are compared by a command** (ADR-122):
+
+```sh
+go run ./cmd/api reconcile-coverage            # report; exits non-zero on drift
+go run ./cmd/api reconcile-coverage --repair   # grant what is missing, revoke what is stray
+```
+
+It prints one JSON line per disagreement: `MISSING` (an `ACTIVE` membership
+lacks a tuple its row implies and nothing is pending to write it) and
+`UNEXPECTED` (the graph covers a membership that is not `ACTIVE`, or covers it
+on a plan it has left). It covers membership coverage only; run it from a
+scheduler and alert on the exit status.
+
 **A tenant's time zone** is an IANA region name given at provisioning
 (`"time_zone": "Asia/Kolkata"` on `POST /platform/tenants`; `UTC` if absent) and
 is what "today" means for that tenant (ADR-119). `/me` reports it with today's

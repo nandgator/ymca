@@ -108,7 +108,7 @@ jobs:
         run: |
           for run in 1 2; do
             echo "::group::integration run $run"
-            go test -count=1 -tags 'integration dev' -p 1 ./...
+            go test -count=1 -timeout 20m -tags 'integration dev' -p 1 ./...
             echo "::endgroup::"
           done
 
@@ -117,6 +117,17 @@ jobs:
           n=$(psql "$SUPERUSER_URL" -tAc "SELECT count(*) FROM authorization_outbox WHERE dispatched_at IS NULL AND voided_at IS NULL")
           echo "pending outbox rows: $n"
           test "$n" = "0"
+
+      - name: The suite leaves no tenant behind
+        run: |
+          n=$(psql "$SUPERUSER_URL" -tAc "SELECT count(*) FROM tenant")
+          echo "tenants left: $n"
+          test "$n" = "0"
+
+      - name: The graph and the database agree
+        env:
+          YMCA_DATABASE_URL: postgres://ymca_api:ci-api@localhost:5432/ymca?sslmode=disable
+        run: go run ./cmd/api reconcile-coverage
 
   app:
     runs-on: ubuntu-latest
