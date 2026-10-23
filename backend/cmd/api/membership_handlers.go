@@ -132,6 +132,41 @@ func handleListDirectory(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.
 	}
 }
 
+// handleMoveMembership is POST /t/{t}/memberships/{m}/plan: the explicit,
+// per-membership, auditable migration of a holder to another plan (05.3.2,
+// ADR-121). It needs administrator authority, as suspending does, because it
+// changes what the member is entitled to.
+func handleMoveMembership(pool *db.DB, fga *authz.FGA, rev membership.Revoker, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeTenant(w, r, pool, fga, logger, "admin") {
+			return
+		}
+		actor, ok := callerPerson(w, r)
+		if !ok {
+			return
+		}
+		var body struct {
+			PlanID string `json:"plan_id"`
+		}
+		raw, err := httpx.ReadJSON(r, &body)
+		if err != nil {
+			httpx.WriteError(w, httpx.CodeInvalidRequest, "request body could not be read as JSON")
+			return
+		}
+		id := r.PathValue("membership")
+		key, err := httpx.IdempotencyKey(r, "POST /t/{t}/memberships/"+id+"/plan", raw)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		tenantID := r.PathValue("tenant")
+		runIdempotent(w, r, pool, logger, key, http.StatusOK,
+			func(ctx context.Context, tx pgx.Tx) (any, error) {
+				return membership.MovePlan(ctx, tx, tenantID, id, body.PlanID, actor, rev)
+			})
+	}
+}
+
 // handleMembershipTransition builds the three state-change endpoints, which
 // share everything but the domain call: an admin check, an idempotency key
 // (a retry after a lost 200 must get the answer, not membership_wrong_state),

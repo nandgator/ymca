@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -162,6 +163,69 @@ func handleCreatePlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.Han
 		}
 		httpx.WriteJSON(w, http.StatusCreated, plan)
 	}
+}
+
+// handlePlanTransition builds the four plan-lifecycle endpoints (05.3.2,
+// ADR-121). They share an administrator check, an idempotency key — a retry
+// after a lost 200 must get the answer and not plan_wrong_state — and one
+// transaction in which the change and the key commit together. Only supersede
+// has a body: the successor.
+func handlePlanTransition(
+	pool *db.DB, fga *authz.FGA, logger *slog.Logger, verb string,
+	act func(ctx context.Context, tx pgx.Tx, tenantID, id, successor string) (membership.Plan, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeTenant(w, r, pool, fga, logger, configurePermission) {
+			return
+		}
+		var body struct {
+			SuccessorPlanID string `json:"successor_plan_id"`
+		}
+		raw, err := httpx.ReadOptionalJSON(r, &body)
+		if err != nil {
+			httpx.WriteError(w, httpx.CodeInvalidRequest, "request body could not be read as JSON")
+			return
+		}
+		id := r.PathValue("plan")
+		key, err := httpx.IdempotencyKey(r, "POST /t/{t}/membership-plans/"+id+"/"+verb, raw)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		tenantID := r.PathValue("tenant")
+		runIdempotent(w, r, pool, logger, key, http.StatusOK,
+			func(ctx context.Context, tx pgx.Tx) (any, error) {
+				return act(ctx, tx, tenantID, id, body.SuccessorPlanID)
+			})
+	}
+}
+
+func handleClosePlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return handlePlanTransition(pool, fga, logger, "close",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, _ string) (membership.Plan, error) {
+			return membership.ClosePlan(ctx, tx, tenantID, id)
+		})
+}
+
+func handleReopenPlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return handlePlanTransition(pool, fga, logger, "reopen",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, _ string) (membership.Plan, error) {
+			return membership.ReopenPlan(ctx, tx, tenantID, id)
+		})
+}
+
+func handleRetirePlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return handlePlanTransition(pool, fga, logger, "retire",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, _ string) (membership.Plan, error) {
+			return membership.RetirePlan(ctx, tx, tenantID, id)
+		})
+}
+
+func handleSupersedePlan(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return handlePlanTransition(pool, fga, logger, "supersede",
+		func(ctx context.Context, tx pgx.Tx, tenantID, id, successor string) (membership.Plan, error) {
+			return membership.SupersedePlan(ctx, tx, tenantID, id, successor)
+		})
 }
 
 // handleListPlans is checked as may_approve_membership, not tenant admin: the

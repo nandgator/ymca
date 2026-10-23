@@ -351,6 +351,7 @@ func (h *harness) purge() {
 			`DELETE FROM idempotency_key WHERE tenant_id = $1`,
 			`DELETE FROM membership_suspension WHERE membership_id IN
 			   (SELECT id FROM membership WHERE tenant_id = $1)`,
+			`DELETE FROM membership_plan_change WHERE tenant_id = $1`,
 			`DELETE FROM membership WHERE tenant_id = $1`,
 			`DELETE FROM membership_plan WHERE tenant_id = $1`,
 			`DELETE FROM consumption_type WHERE tenant_id = $1`,
@@ -370,7 +371,13 @@ func (h *harness) purge() {
 	for _, id := range h.persons {
 		_, _ = h.pool.Pool().Exec(bg, `DELETE FROM person WHERE id = $1::uuid`, id)
 	}
-	_, _ = h.pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, h.tenantID)
+	// Read, not ignored: a table this purge does not know about makes the
+	// tenant undeletable, and a cleanup that cannot fail the test cannot tell
+	// you it did not work (HANDOFF §3). Added after a new tenant-scoped table
+	// leaked a tenant per run without a word.
+	if _, err := h.pool.Pool().Exec(bg, `DELETE FROM tenant WHERE id = $1::uuid`, h.tenantID); err != nil {
+		h.t.Errorf("cleanup could not delete tenant %s: %v", h.tenantID, err)
+	}
 
 	// The proof. Payload-scoped on purpose: this is a VERIFICATION that
 	// catches a fact the aggregate-scoped delete missed, not a delete.

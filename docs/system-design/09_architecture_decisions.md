@@ -136,6 +136,7 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-118](#adr-118) | A membership's coverage is revoked synchronously; its term is checked at decision time        | R13        |
 | [ADR-119](#adr-119) | "Today" is the tenant's: a zone on the tenant, and one place that turns an instant into a day | R14        |
 | [ADR-120](#adr-120) | An issued invoice is corrected by a credit note with its own number; the balance is derived   | R14        |
+| [ADR-121](#adr-121) | A plan is closed, replaced and retired, never edited; a holder moves one membership at a time | R14        |
 
 ---
 
@@ -2447,3 +2448,40 @@ still unpaid for any amount short of its whole. Tax is not apportioned across
 a partial credit, because no tax is computed (11.2). The invoice row is locked
 by both writers, so a credit and a payment racing for one balance serialise;
 that lock is the mechanism and is not separately tested under concurrency.
+
+---
+
+### ADR-121
+
+**A plan is closed, replaced and retired, never edited; a holder moves one
+membership at a time** · Accepted · R14
+
+**Decision.** A plan has four endpoints — close, reopen, supersede, retire — and
+a holder has one: `POST /t/{t}/memberships/{m}/plan`. `membership_plan.status`
+is a CHECK over 05.3.2's four values; a plan cannot succeed itself; a plan with
+a successor must be closed. Retiring requires that no membership on the plan is
+`ACTIVE`, `SUSPENDED` or `LAPSED`. Admission share-locks the plan row it admits
+onto and every transition locks it for update, so a close or retire waits for an
+admission in flight and then counts the new holder. Moving an `ACTIVE` member
+runs ADR-118's revocation path for the plan they leave and queues the covering
+grant for the plan they join; moving a `SUSPENDED` member changes the plan and
+leaves the grant to the reinstatement. Every move writes a
+`membership_plan_change` row.
+
+**Rationale.** 05.3.2: "changing the entitlements of a plan people already hold
+is a silent bulk change to what they bought", so a plan is replaced and its
+holders migrated explicitly. A move changes what the member may do, so it is an
+administrator's act and uses the machinery that makes a suspension safe rather
+than a second implementation of it: the pending grant for the old plan is
+voided so a dispatcher that has not yet run cannot apply it, and a failed
+delete rolls the whole move back.
+
+**Consequences.** There is no bulk move: moving a hundred members is a hundred
+requests, deliberately, because each is an authorization change that can fail.
+`superseded_by_id` is informational for the front desk and for reopen; nothing
+follows it automatically, so a member on a superseded plan stays on it until
+moved. A member moved off a plan is under-covered until the next dispatch, the
+same lag reinstating has. `OPEN` is the only state that admits, and `DRAFT`
+remains unreachable (plans are created `OPEN`). The share lock on admission is
+the mechanism that stops a retire overtaking an admission; it is not tested
+under concurrency.

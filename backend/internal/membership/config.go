@@ -171,7 +171,14 @@ type Plan struct {
 	Duration    string  `json:"duration"`
 	BundleID    *string `json:"entitlement_bundle_id"`
 	Status      string  `json:"status"`
+
+	// SupersededByID is the plan that replaces this one (05.3.2). A superseded
+	// plan is closed to new members; its holders move one by one.
+	SupersededByID *string `json:"superseded_by_id"`
 }
+
+const planColumns = `id::text, code, name, acquisition, duration,
+	entitlement_bundle_id::text, status, superseded_by_id::text`
 
 // CreatePlan records a plan and, when it grants a bundle, queues the
 // `via_plan` edge (ADR-107).
@@ -187,11 +194,9 @@ func CreatePlan(ctx context.Context, tx pgx.Tx, tenantID string, p Plan) (Plan, 
 		    (id, tenant_id, code, name, acquisition, duration,
 		     entitlement_bundle_id, status)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6::uuid, 'OPEN')
-		RETURNING id::text, code, name, acquisition, duration,
-		          entitlement_bundle_id::text, status
-	`, tenantID, p.Code, p.Name, p.Acquisition, p.Duration, p.BundleID).
+		RETURNING `+planColumns, tenantID, p.Code, p.Name, p.Acquisition, p.Duration, p.BundleID).
 		Scan(&out.ID, &out.Code, &out.Name, &out.Acquisition, &out.Duration,
-			&out.BundleID, &out.Status)
+			&out.BundleID, &out.Status, &out.SupersededByID)
 	if err != nil {
 		return Plan{}, fmt.Errorf("membership: create plan: %w", err)
 	}
@@ -238,8 +243,7 @@ func ListPlans(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) (
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, code, name, acquisition, duration,
-		       entitlement_bundle_id::text, status
+		SELECT `+planColumns+`
 		  FROM membership_plan
 		 WHERE tenant_id = $1
 		   AND ($2 = '' OR code > $2)
@@ -255,7 +259,7 @@ func ListPlans(ctx context.Context, tx pgx.Tx, tenantID string, p page.Params) (
 	for rows.Next() {
 		var pl Plan
 		if err := rows.Scan(&pl.ID, &pl.Code, &pl.Name, &pl.Acquisition,
-			&pl.Duration, &pl.BundleID, &pl.Status); err != nil {
+			&pl.Duration, &pl.BundleID, &pl.Status, &pl.SupersededByID); err != nil {
 			return nil, fmt.Errorf("membership: scan plan: %w", err)
 		}
 		out = append(out, pl)

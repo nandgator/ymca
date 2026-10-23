@@ -317,6 +317,9 @@ CREATE TABLE membership_plan (
     UNIQUE (tenant_id, code)
 );
 -- Plans are versioned, never edited in place. 05.3.2
+-- Added by 0011 (ADR-121): CHECKs on status and superseded_by_id (a plan cannot
+-- succeed itself, and a plan with a successor is closed), and membership_plan_change
+-- (membership, from_plan, to_plan, changed_by, changed_at) as the audit of a move.
 
 CREATE TABLE governance_profile (
     id                    uuid PRIMARY KEY,

@@ -53,7 +53,10 @@ type member struct {
 
 // admit creates a person and a login for them and admits them onto the plan
 // through the API. i must be unique within the test.
-func (hs *hostel) admit(i int, name string) member {
+func (hs *hostel) admit(i int, name string) member { return hs.admitOn(hs.planID, i, name) }
+
+// admitOn is admit onto a plan other than the hostel's first.
+func (hs *hostel) admitOn(planID string, i int, name string) member {
 	hs.h.t.Helper()
 	h := hs.h
 	m := member{
@@ -62,7 +65,7 @@ func (hs *hostel) admit(i int, name string) member {
 	}
 	m.tok = h.newLogin(m.person, m.princ, fmt.Sprintf("%s-%d-%s", name, i, h.tenantID), "PERSONAL", name)
 	adm := h.must(h.adminTok, "POST", "/memberships", map[string]any{
-		"person_id": m.person, "plan_id": hs.planID, "number": fmt.Sprintf("H-%d", i),
+		"person_id": m.person, "plan_id": planID, "number": fmt.Sprintf("H-%d", i),
 	}, http.StatusCreated, "Idempotency-Key", hs.key())
 	m.membership = str(adm, "id")
 	return m

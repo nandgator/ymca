@@ -227,6 +227,11 @@ func registerRoutes(
 	// begin in the close, which is Finance's only publisher.
 	const t = "/api/v1/t/{tenant}"
 	tenantRoute("POST "+t+"/memberships/{membership}/suspend", handleSuspendMembership(pool, fga, rev, logger))
+	tenantRoute("POST "+t+"/memberships/{membership}/plan", handleMoveMembership(pool, fga, rev, logger))
+	tenantRoute("POST "+t+"/membership-plans/{plan}/close", handleClosePlan(pool, fga, logger))
+	tenantRoute("POST "+t+"/membership-plans/{plan}/reopen", handleReopenPlan(pool, fga, logger))
+	tenantRoute("POST "+t+"/membership-plans/{plan}/retire", handleRetirePlan(pool, fga, logger))
+	tenantRoute("POST "+t+"/membership-plans/{plan}/supersede", handleSupersedePlan(pool, fga, logger))
 	tenantRoute("POST "+t+"/memberships/{membership}/reinstate", handleReinstateMembership(pool, fga, logger))
 	tenantRoute("POST "+t+"/memberships/{membership}/terminate", handleTerminateMembership(pool, fga, rev, logger))
 	tenantRoute("POST "+t+"/consumption-types/{type}/options", handleCreateOption(pool, fga, logger))

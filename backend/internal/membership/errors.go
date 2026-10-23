@@ -36,6 +36,18 @@ var (
 // and the caller named the plan, so the message may say which.
 var ErrPlanNotOpen = errors.New("membership: that plan does not accept new members")
 
+// ErrPlanWrongState is 409 plan_wrong_state: 05.3.2's plan states have no such
+// transition from where the plan is.
+var ErrPlanWrongState = errors.New("membership: that transition is not allowed from the plan's current state")
+
+// ErrPlanHasHolders is 409 plan_has_holders: a plan is retired only when nobody
+// holds it, and the holders move first (ADR-121).
+var ErrPlanHasHolders = errors.New("membership: members still hold that plan")
+
+// ErrInvalidPlanTarget is invalid_request: the plan named as a successor, or as
+// the plan to move a member onto, cannot be one. The caller named it.
+var ErrInvalidPlanTarget = errors.New("membership: that is not a plan this can name")
+
 // The SQLSTATEs admission maps. Which constraint produced one is carried in
 // the constraint name, not in the message: the message is written for a log
 // and A3.4 forbids putting it in a response.

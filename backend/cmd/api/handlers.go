@@ -239,6 +239,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		errors.Is(err, finance.ErrInvalid),
 		errors.Is(err, httpx.ErrMissingIdempotencyKey),
 		errors.Is(err, organization.ErrOwnerSubjectTaken),
+		errors.Is(err, membership.ErrInvalidPlanTarget),
 		errors.Is(err, organization.ErrInvalidTimeZone),
 		errors.Is(err, organization.ErrInvalidUnitType),
 		errors.Is(err, organization.ErrInvalidParentType):
@@ -285,6 +286,10 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		httpx.WriteError(w, httpx.CodePaymentExceedsBalance, err.Error())
 	case errors.Is(err, finance.ErrExceedsInvoice):
 		httpx.WriteError(w, httpx.CodeCreditExceedsInvoice, err.Error())
+	case errors.Is(err, membership.ErrPlanWrongState):
+		httpx.WriteError(w, httpx.CodePlanWrongState, err.Error())
+	case errors.Is(err, membership.ErrPlanHasHolders):
+		httpx.WriteError(w, httpx.CodePlanHasHolders, err.Error())
 	case errors.Is(err, membership.ErrWrongState):
 		httpx.WriteError(w, httpx.CodeMembershipWrongState, err.Error())
 	case errors.Is(err, membership.ErrRevocationFailed):

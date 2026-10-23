@@ -123,6 +123,8 @@ The codes every endpoint may emit, and their status:
 409  payment_exceeds_balance more than is owed
 409  credit_exceeds_invoice  more than the invoice still asks for (ADR-120)
 409  membership_wrong_state  the membership is not in the state this needs (A3.13)
+409  plan_wrong_state        the plan is not in the state this needs (ADR-121)
+409  plan_has_holders        members still hold the plan (ADR-121)
 422  record_mode_not_allowed the type does not take this kind of recording
 500  internal           anything the caller cannot act on
 ```
@@ -258,6 +260,10 @@ CONFIGURATION
   POST   /t/{t}/entitlement-bundles/{b}/entitles   bundle entitles an object
   POST   /t/{t}/membership-plans                   define a plan
   GET    /t/{t}/membership-plans
+  POST   /t/{t}/membership-plans/{p}/close         stop admitting (ADR-121)
+  POST   /t/{t}/membership-plans/{p}/reopen
+  POST   /t/{t}/membership-plans/{p}/supersede     { successor_plan_id }
+  POST   /t/{t}/membership-plans/{p}/retire        only once nobody holds it
 
 IDENTITY AND MEMBERSHIP
   POST   /t/{t}/people                             create person
@@ -453,11 +459,44 @@ between them, a member admitted through this API would hold no entitlements
 and could not record a meal — which is the whole of the hostel case (K2, K8).
 The gap was found by trying to build 8.3, not by reading A3.
 
-**Create and read only.** 05.3.2 gives plans a real lifecycle — editing a live
-plan is prohibited, supersession is supported, `CLOSED_TO_NEW` is the common
-real state. None of that is here. A plan can be created and listed; it cannot
-yet be superseded or retired through the API. That is a deferral, logged in
-11.2, not an omission.
+**A plan is never edited once people hold it** (05.3.2). It is created `OPEN`,
+and its lifecycle is the four endpoints below (ADR-121); a plan's entitlements
+are changed by creating a successor and moving holders onto it.
+
+```txt
+OPEN ──close──▶ CLOSED_TO_NEW ──retire──▶ RETIRED
+  ▲                  │
+  └───── reopen ─────┘            while it has no successor
+```
+
+All four require `tenant:admin`, take an `Idempotency-Key` (a retry after a
+lost 200 gets the answer and not `plan_wrong_state`), and answer the plan. Any
+transition from a state it does not belong to is `409 plan_wrong_state`.
+
+- **close** — `OPEN` to `CLOSED_TO_NEW`. Admission refuses the plan from then on
+  (`invalid_request`, the plan is not OPEN); holders keep it. Admission
+  share-locks the plan row until it commits, so a close waits for an admission
+  in flight and the next retire counts the new holder.
+- **reopen** — back to `OPEN`, unless the plan has a successor.
+- **supersede** — `{ "successor_plan_id": ... }`. The successor must be another
+  plan of the tenant that is `OPEN` (`invalid_request` otherwise). The plan
+  becomes `CLOSED_TO_NEW` with `superseded_by_id` set, shown in the plan list.
+  Holders are not moved. A replaced plan is always closed (migration 0011's
+  CHECK), which is also why the chain cannot loop.
+- **retire** — `CLOSED_TO_NEW` to `RETIRED`, only when no membership on it is
+  `ACTIVE`, `SUSPENDED` or `LAPSED` (`409 plan_has_holders`; a `TERMINATED`
+  member does not hold a plan).
+
+Moving a holder is `POST /t/{t}/memberships/{m}/plan { "plan_id": ... }` —
+`tenant:admin`, idempotent, "explicit, per-membership, auditable" (05.3.2). The
+target must be another `OPEN` plan of the tenant; the membership must be
+`ACTIVE` or `SUSPENDED` (`409 membership_wrong_state` otherwise). An `ACTIVE`
+member follows the revocation path for the plan they leave — the same fence,
+void and synchronous delete as a suspension (ADR-118), rolled back and reported
+if the delete fails — and the grant for the plan they join is queued, so for a
+dispatch they are under-covered and never over-covered. A `SUSPENDED` member's
+plan changes and reinstating grants the new one. Each move writes a
+`membership_plan_change` row: membership, from, to, who, when.
 
 ### The membership number is supplied, not allocated
 

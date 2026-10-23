@@ -82,7 +82,9 @@ type NewMembership struct {
 // "the common real state — existing life members keep a plan that no longer
 // accepts applicants", and a plan in DRAFT is not live yet: only OPEN admits.
 // Checking it in a separate SELECT would leave a window in which a plan
-// closed between the read and the insert.
+// closed between the read and the insert. The row is also share-locked until
+// the admission commits, so a plan being closed or retired waits for it and
+// then counts the new holder (ADR-121).
 func Admit(ctx context.Context, tx pgx.Tx, tenantID string, in NewMembership) (Membership, error) {
 	m := Membership{}
 	err := tx.QueryRow(ctx, `
@@ -95,6 +97,7 @@ func Admit(ctx context.Context, tx pgx.Tx, tenantID string, in NewMembership) (M
 		 WHERE p.id = $3::uuid
 		   AND p.tenant_id = $1
 		   AND p.status = 'OPEN'
+		   FOR SHARE OF p
 		RETURNING id::text, person_id::text, plan_id::text, org_unit_id::text,
 		          number, state,
 		          to_char(admitted_at, 'YYYY-MM-DD"T"HH24:MI:SSOF:00'),
