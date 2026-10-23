@@ -285,7 +285,7 @@ FINANCE                                            (detail: A3.11)
 
 ME                                                 (detail: A3.11, A3.12)
   GET    /t/{t}/memberships?q=                     the member directory
-  GET    /t/{t}/me                                 principal, kind, permissions
+  GET    /t/{t}/me                                 principal, kind, permissions, calendar
   GET    /t/{t}/me/consumption-types               what I may record
   GET    /t/{t}/me/consumption                     own records
   GET    /t/{t}/me/invoices                        own invoices
@@ -294,11 +294,17 @@ ME                                                 (detail: A3.11, A3.12)
 `/me` is what makes one permission-gated app possible: the client renders
 from the permissions it is told it has, rather than from a role it guessed.
 
+It also carries the tenant's calendar (ADR-119): `time_zone` (an IANA name),
+`today` (the calendar day there, `YYYY-MM-DD`) and `utc_offset_seconds` (the
+offset in force now, east positive). A client has no zone database; it turns an
+instant into the tenant's day by adding the offset.
+
 ### Platform provisioning creates a tenant AND its first owner
 
 ```txt
 POST /platform/tenants
 { "legal_name": ..., "display_name": ..., "jurisdiction": ...,
+  "time_zone": "Asia/Kolkata",           // optional, an IANA region; UTC if absent
   "owner": { "display_name": ..., "idp_subject": ... } }
 
 creates   tenant row
@@ -642,12 +648,13 @@ person may not overlap (`obligation_overlaps`, 409 — A2.9's exclusion).
 ### Dates are UTC midnights
 
 Every `date` in this section is a calendar day, and the `tstzrange` columns
-store `[from 00:00 UTC, until+1 00:00 UTC)`. A tenant time zone is not
-modelled (11.2), so a late-evening meal in another zone is the tenant's own
-`occurred_on` to state, which is why `occurred_on` is a date the caller
-supplies and never a timestamp the server derives, and "the future" means more
-than one day ahead of UTC — the widest zone offset. API ranges are **inclusive**
-at both ends (`"from": "2026-10-01", "to": "2026-10-31"`).
+store `[from 00:00 UTC, until+1 00:00 UTC)`. Which day it is _now_ belongs to
+the tenant (ADR-119): `occurred_on` is still a date the caller supplies and
+never a timestamp the server derives, "the future" is any day after today
+where the tenant is, a record is late when the tenant's day began longer ago
+than the type's correction window, and an ended membership's obligations stop
+after the tenant's today. API ranges are **inclusive** at both ends
+(`"from": "2026-10-01", "to": "2026-10-31"`).
 
 ### Corrections
 

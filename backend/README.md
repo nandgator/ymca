@@ -19,6 +19,8 @@ migrations/0005_authorization_edge_invariants.sql
                            ADR-016's three invariants, as a trigger (ADR-115)
 migrations/0006_consumption.sql  voided, once-only supersede, period close, rates
 migrations/0007_finance.sql      invoice order, one draft per payer, party keys
+migrations/0008_membership_lifecycle.sql  the state machine as a CHECK, one open suspension
+migrations/0009_tenant_time_zone.sql  tenant.time_zone, tenant_today and friends, financial_year
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)
@@ -318,6 +320,25 @@ principal for the subject (or finds the existing one) and writes
 written outside the outbox, because there is no tenant for the outbox to name. It
 is safe to run twice, which also repairs a run that died between the database and
 OpenFGA. The subject must match what the identity provider will assert.
+
+**A registered person gets a login by a command too**, until the identity
+provider's adapter exists (ADR-106):
+
+```sh
+go run ./cmd/api bootstrap-principal <person-id> <idp-subject>
+```
+
+It binds the subject to an `ACTIVE` person as a `PERSONAL` principal and writes
+no tuple: what the principal may do flows from the person's memberships and role
+assignments. Running it twice is a no-op; a subject already bound to a different
+person is refused rather than moved, because moving a login would hand over
+everything the first person held. Like `bootstrap-operator` it is not behind the
+dev tag.
+
+**A tenant's time zone** is an IANA region name given at provisioning
+(`"time_zone": "Asia/Kolkata"` on `POST /platform/tenants`; `UTC` if absent) and
+is what "today" means for that tenant (ADR-119). `/me` reports it with today's
+date there and the offset in force.
 
 `mint-token` carries the same build tag as the provider, so a deployment build
 can no more issue a credential than it can accept one. The token it prints is

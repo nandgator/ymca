@@ -79,8 +79,8 @@ WHERE ra.subject_principal_id = $1::uuid
             WHERE c.person_id = p.person_id
               AND v.type = rrc.verification_type
               AND v.status = 'VERIFIED'
-              AND (c.valid_from IS NULL OR c.valid_from <= current_date)
-              AND (c.valid_until IS NULL OR c.valid_until >= current_date)
+              AND (c.valid_from IS NULL OR c.valid_from <= tenant_today(ra.tenant_id))
+              AND (c.valid_until IS NULL OR c.valid_until >= tenant_today(ra.tenant_id))
         )
   )
   AND NOT EXISTS (

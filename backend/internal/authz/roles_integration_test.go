@@ -251,6 +251,56 @@ func TestRoleAssignment_AgainstRealStore(t *testing.T) {
 		}
 	})
 
+	// ADR-119. A clearance's dates are calendar days, and which day it is
+	// belongs to the tenant. Two zones, because at any instant one of them is
+	// on a different date from UTC and the old `current_date` fails there.
+	t.Run("a clearance is current on the tenant's own day", func(t *testing.T) {
+		assign(past, future)
+		inTenant(`INSERT INTO role_required_clearance (role_definition_id, verification_type)
+		          VALUES ($1,'BACKGROUND_CHECK') ON CONFLICT DO NOTHING`, roleDefID)
+		var verificationID string
+		if err := database.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO verification (id, tenant_id, subject_type, subject_id, type, status)
+				VALUES (gen_random_uuid(), $1, 'PERSON', $2, 'BACKGROUND_CHECK', 'VERIFIED')
+				RETURNING id::text`, tenantID, personID).Scan(&verificationID); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `
+				INSERT INTO clearance (verification_id, person_id, tenant_id) VALUES ($1::uuid, $2, $3)`,
+				verificationID, personID, tenantID)
+			return err
+		}); err != nil {
+			t.Fatalf("seed clearance: %v", err)
+		}
+		t.Cleanup(func() {
+			inTenant(`DELETE FROM clearance WHERE verification_id = $1::uuid`, verificationID)
+			inTenant(`DELETE FROM verification WHERE id = $1::uuid`, verificationID)
+			_, _ = database.Pool().Exec(context.Background(), `UPDATE tenant SET time_zone = 'UTC' WHERE id = $1`, tenantID)
+			inTenant(`DELETE FROM role_required_clearance WHERE role_definition_id = $1`, roleDefID)
+		})
+
+		for _, zone := range []string{"Pacific/Kiritimati", "Pacific/Pago_Pago"} {
+			loc, err := time.LoadLocation(zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			day := time.Now().In(loc).Format("2006-01-02")
+			if _, err := database.Pool().Exec(ctx, `UPDATE tenant SET time_zone = $2 WHERE id = $1`, tenantID, zone); err != nil {
+				t.Fatal(err)
+			}
+			inTenant(`UPDATE clearance SET valid_from = $2::date, valid_until = $2::date
+			          WHERE verification_id = $1::uuid`, verificationID, day)
+			allowed, err := authz.Check(ctx, database, fga, request("role-clearance-"+zone))
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if !allowed {
+				t.Errorf("%s: a clearance valid only on %s, the tenant's day, did not authorize", zone, day)
+			}
+		}
+	})
+
 	// 05.9.4. The role path is suppressed by the restriction kinds that act
 	// on it, which is why they need no restriction_kind_permission row.
 	t.Run("NO_ROLE_ASSIGNMENT suppresses the role", func(t *testing.T) {

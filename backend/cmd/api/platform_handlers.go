@@ -66,6 +66,7 @@ func handleCreateTenant(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.H
 			LegalName    string `json:"legal_name"`
 			DisplayName  string `json:"display_name"`
 			Jurisdiction string `json:"jurisdiction"`
+			TimeZone     string `json:"time_zone"` // optional; UTC when absent (ADR-119)
 			Owner        struct {
 				DisplayName string `json:"display_name"`
 				IDPSubject  string `json:"idp_subject"`
@@ -107,6 +108,7 @@ func handleCreateTenant(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.H
 				LegalName:        body.LegalName,
 				DisplayName:      body.DisplayName,
 				Jurisdiction:     body.Jurisdiction,
+				TimeZone:         body.TimeZone,
 				OwnerDisplayName: ownerName,
 				OwnerIDPSubject:  body.Owner.IDPSubject,
 			})

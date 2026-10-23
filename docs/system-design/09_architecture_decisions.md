@@ -14,126 +14,127 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 
 ## Index
 
-| #                   | Decision                                                                                     | Q          |
-| ------------------- | -------------------------------------------------------------------------------------------- | ---------- |
-| [ADR-001](#adr-001) | Multi-tenant, centralized yet sovereign                                                      | 1          |
-| [ADR-002](#adr-002) | Hybrid RBAC + ReBAC + ABAC                                                                   | —          |
-| [ADR-003](#adr-003) | OpenFGA as the authorization engine                                                          | 8r         |
-| [ADR-004](#adr-004) | Tenancy is an immutable security boundary                                                    | 1          |
-| [ADR-005](#adr-005) | Separate platform and tenant authority planes                                                | 11         |
-| [ADR-006](#adr-006) | Organizational relationship ≠ authority                                                      | 15         |
-| [ADR-007](#adr-007) | Authority may be narrower than affiliation                                                   | 16         |
-| [ADR-008](#adr-008) | Authority may flow against organizational direction                                          | 17         |
-| [ADR-009](#adr-009) | Five distinct authority verbs                                                                | 86         |
-| [ADR-010](#adr-010) | Tenant membership is a relationship                                                          | 5          |
-| [ADR-011](#adr-011) | Role definitions global, assignments scoped                                                  | 7          |
-| [ADR-012](#adr-012) | Scope is a separate construct from containment                                               | 8          |
-| [ADR-013](#adr-013) | Scope assignment propagates to descendants                                                   | 61         |
-| [ADR-014](#adr-014) | Propagation is per-permission, not per-role                                                  | 62         |
-| [ADR-015](#adr-015) | Scope targets are heterogeneous                                                              | 63         |
-| [ADR-016](#adr-016) | Authorization containment is a DAG                                                           | 64         |
-| [ADR-017](#adr-017) | No scope exclusions                                                                          | 66         |
-| [ADR-018](#adr-018) | Every scope path has a tenant ancestor                                                       | 67         |
-| [ADR-019](#adr-019) | Cross-tenant authority is an explicit grant                                                  | 68         |
-| [ADR-020](#adr-020) | Ad-hoc scope collections deferred                                                            | 65         |
-| [ADR-021](#adr-021) | Relationship-derived permissions permitted                                                   | 9          |
-| [ADR-022](#adr-022) | Roles are reusable permission bundles                                                        | 10         |
-| [ADR-023](#adr-023) | Authorization vs domain eligibility split                                                    | 13, 49     |
-| [ADR-024](#adr-024) | OpenFGA knows only the authorization graph                                                   | 14         |
-| [ADR-025](#adr-025) | Postgres owns business state, OpenFGA owns relationships                                     | 28         |
-| [ADR-026](#adr-026) | Transactional outbox, not distributed transactions                                           | 29         |
-| [ADR-027](#adr-027) | Graded failure modes on authorization unavailability                                         | 30         |
-| [ADR-028](#adr-028) | Tenant isolation represented twice                                                           | 31         |
-| [ADR-029](#adr-029) | PostgreSQL row-level security                                                                | 32         |
-| [ADR-030](#adr-030) | No PII in authorization tuples                                                               | —          |
-| [ADR-031](#adr-031) | Single OpenFGA store, tenant-namespaced                                                      | 90         |
-| [ADR-032](#adr-032) | JWTs carry identity, not permissions                                                         | —          |
-| [ADR-033](#adr-033) | Policy is a structured domain object                                                         | 18         |
-| [ADR-034](#adr-034) | Mandatory / default / local policy levels                                                    | 4          |
-| [ADR-035](#adr-035) | Mandatory policy cannot be overridden                                                        | 20         |
-| [ADR-036](#adr-036) | Inheritance semantics are per policy type                                                    | 21         |
-| [ADR-037](#adr-037) | Domain owns policy evaluation                                                                | 19         |
-| [ADR-038](#adr-038) | Person is global, membership tenant-local                                                    | 22         |
-| [ADR-039](#adr-039) | Authentication identity is global                                                            | 23         |
-| [ADR-040](#adr-040) | Multiple deliberate principals permitted                                                     | 24         |
-| [ADR-041](#adr-041) | Person relationships are not subtypes                                                        | 37, 38, 39 |
-| [ADR-042](#adr-042) | Guardianship is separate from dependency                                                     | 96         |
-| [ADR-043](#adr-043) | Membership is distinct from enrollment                                                       | 40         |
-| [ADR-044](#adr-044) | Membership belongs to exactly one tenant                                                     | 41         |
-| [ADR-045](#adr-045) | Membership has a primary holder and dependents                                               | 75         |
-| [ADR-046](#adr-046) | Membership admission is an approval workflow                                                 | 76         |
-| [ADR-047](#adr-047) | Suspension is explicit, never derived                                                        | 77         |
-| [ADR-048](#adr-048) | No automatic age-band transition                                                             | 78         |
-| [ADR-049](#adr-049) | Verification is a first-class object                                                         | 79         |
-| [ADR-050](#adr-050) | Conferred memberships are distinct from purchased                                            | 80         |
-| [ADR-051](#adr-051) | Governance rights are a separate entitlement axis                                            | 83         |
-| [ADR-052](#adr-052) | Foreign membership recognition deferred                                                      | 42         |
-| [ADR-053](#adr-053) | Programme / offering / enrollment / occurrence                                               | 43         |
-| [ADR-054](#adr-054) | Offerings need not be commercial                                                             | 44         |
-| [ADR-055](#adr-055) | Pricing is a separate value object                                                           | 45         |
-| [ADR-056](#adr-056) | Resource is distinct from programme                                                          | 46, 47, 48 |
-| [ADR-057](#adr-057) | Resource entitlement is a relationship                                                       | 50         |
-| [ADR-058](#adr-058) | Booking and Stay are independent aggregates                                                  | 55         |
-| [ADR-059](#adr-059) | Allocation exclusivity enforced in the database                                              | 55c        |
-| [ADR-060](#adr-060) | Access mode is time-scoped, not resource-scoped                                              | 56         |
-| [ADR-061](#adr-061) | Walk-in capacity is not system-enforced                                                      | 57         |
-| [ADR-062](#adr-062) | Waitlist status reserved, feature deferred                                                   | 53, 59     |
-| [ADR-063](#adr-063) | Hostel stay requires approval                                                                | 60         |
-| [ADR-064](#adr-064) | Allocation granularity varies by room type                                                   | 60         |
-| [ADR-065](#adr-065) | Actor and beneficiary may differ                                                             | 82         |
-| [ADR-066](#adr-066) | JIT privileged access, no standing superusers                                                | 25, 26     |
-| [ADR-067](#adr-067) | Break-glass requires dual control                                                            | 26         |
-| [ADR-068](#adr-068) | Impersonation preserves both principals                                                      | 27         |
-| [ADR-069](#adr-069) | Term policy declared on the role definition                                                  | 87         |
-| [ADR-070](#adr-070) | Expiry evaluated at decision time                                                            | 87         |
-| [ADR-071](#adr-071) | Office is distinct from Role                                                                 | 88         |
-| [ADR-072](#adr-072) | Office-holding in scope, elections out                                                       | 88         |
-| [ADR-073](#adr-073) | Affiliation is a stateful relationship                                                       | 84         |
-| [ADR-074](#adr-074) | Affiliation state is recorded; sanction is explicit                                          | 84         |
-| [ADR-075](#adr-075) | Non-affiliated associations are first-class tenants                                          | 85         |
-| [ADR-076](#adr-076) | Permissions system-defined, roles tenant-configurable                                        | 69         |
-| [ADR-077](#adr-077) | Resource types declare behavioural archetypes                                                | 70         |
-| [ADR-078](#adr-078) | No privilege escalation through role creation                                                | 71         |
-| [ADR-079](#adr-079) | Role templates are cloned, not linked                                                        | 72         |
-| [ADR-080](#adr-080) | Role edits show blast radius and emit audit                                                  | 73         |
-| [ADR-081](#adr-081) | Membership plans are tenant-local                                                            | 74         |
-| [ADR-082](#adr-082) | Financial parties are generic                                                                | 89         |
-| [ADR-083](#adr-083) | Composable charge components                                                                 | 81         |
-| [ADR-084](#adr-084) | Payment provider facade                                                                      | 11r        |
-| [ADR-085](#adr-085) | Inter-organizational dues deferred                                                           | 89         |
-| [ADR-086](#adr-086) | Store the verdict, not the evidence                                                          | 97         |
-| [ADR-087](#adr-087) | Clearance is a precondition on role assignment                                               | 92         |
-| [ADR-088](#adr-088) | Safeguarding compliance feeds affiliation standing                                           | 95         |
-| [ADR-089](#adr-089) | Allegation records are out of scope                                                          | 97         |
-| [ADR-090](#adr-090) | Member screening is jurisdiction-gated                                                       | 98         |
-| [ADR-091](#adr-091) | Screening never auto-acts                                                                    | 98         |
-| [ADR-092](#adr-092) | Staff membership is tenant policy                                                            | 24r        |
-| [ADR-093](#adr-093) | Retain everything, scrub PII, preserve audit                                                 | 5          |
-| [ADR-094](#adr-094) | Organizational units are one typed concept                                                   | 34         |
-| [ADR-095](#adr-095) | Org, physical and authorization containment differ                                           | 35, 36     |
-| [ADR-096](#adr-096) | Consumption is realization, distinct from reservation                                        | R1         |
-| [ADR-097](#adr-097) | Obligations are standing, never materialized                                                 | R1         |
-| [ADR-098](#adr-098) | Consumption records are corrected, never edited                                              | R1         |
-| [ADR-099](#adr-099) | Absence relief is snapshotted at declaration                                                 | R1         |
-| [ADR-100](#adr-100) | Consumption enters the charge vocabulary                                                     | R1         |
-| [ADR-101](#adr-101) | Async projection is fenced against synchronous removal                                       | R1         |
-| [ADR-102](#adr-102) | The reaching verbs are recorded, never graph-bearing                                         | R1         |
-| [ADR-103](#adr-103) | Invoice numbers come from a transactional counter                                            | R1         |
-| [ADR-104](#adr-104) | Lists authorize the scope, not the row                                                       | R1         |
-| [ADR-105](#adr-105) | The tenant is a path segment                                                                 | R1         |
-| [ADR-106](#adr-106) | Authentication is a port                                                                     | R1         |
-| [ADR-107](#adr-107) | Entitlement reaches a person by plan or by subscription                                      | R5         |
-| [ADR-108](#adr-108) | Tenant isolation rests on a role, not only on the schema                                     | R5         |
-| [ADR-109](#adr-109) | Role assignments resolved per check, never stored                                            | R8         |
-| [ADR-110](#adr-110) | The grantable set is declared by type restriction                                            | R8         |
-| [ADR-111](#adr-111) | The plane is a credential property; its zero value is tenant                                 | R10        |
-| [ADR-112](#adr-112) | Platform audit is isolated by privilege, not by policy                                       | R10        |
-| [ADR-113](#adr-113) | A tenant is provisioned with its first owner, or inert                                       | R10        |
-| [ADR-114](#adr-114) | Registering a person is a tenant permission on a global row                                  | R10        |
-| [ADR-115](#adr-115) | The DAG's invariants are enforced by the database, not the caller                            | R11        |
-| [ADR-116](#adr-116) | A period is closed once by a constraint, and the close serialises with the records it counts | R13        |
-| [ADR-117](#adr-117) | Consumption hands off to Finance by a call inside the closing transaction                    | R13        |
-| [ADR-118](#adr-118) | A membership's coverage is revoked synchronously; its term is checked at decision time       | R13        |
+| #                   | Decision                                                                                      | Q          |
+| ------------------- | --------------------------------------------------------------------------------------------- | ---------- |
+| [ADR-001](#adr-001) | Multi-tenant, centralized yet sovereign                                                       | 1          |
+| [ADR-002](#adr-002) | Hybrid RBAC + ReBAC + ABAC                                                                    | —          |
+| [ADR-003](#adr-003) | OpenFGA as the authorization engine                                                           | 8r         |
+| [ADR-004](#adr-004) | Tenancy is an immutable security boundary                                                     | 1          |
+| [ADR-005](#adr-005) | Separate platform and tenant authority planes                                                 | 11         |
+| [ADR-006](#adr-006) | Organizational relationship ≠ authority                                                       | 15         |
+| [ADR-007](#adr-007) | Authority may be narrower than affiliation                                                    | 16         |
+| [ADR-008](#adr-008) | Authority may flow against organizational direction                                           | 17         |
+| [ADR-009](#adr-009) | Five distinct authority verbs                                                                 | 86         |
+| [ADR-010](#adr-010) | Tenant membership is a relationship                                                           | 5          |
+| [ADR-011](#adr-011) | Role definitions global, assignments scoped                                                   | 7          |
+| [ADR-012](#adr-012) | Scope is a separate construct from containment                                                | 8          |
+| [ADR-013](#adr-013) | Scope assignment propagates to descendants                                                    | 61         |
+| [ADR-014](#adr-014) | Propagation is per-permission, not per-role                                                   | 62         |
+| [ADR-015](#adr-015) | Scope targets are heterogeneous                                                               | 63         |
+| [ADR-016](#adr-016) | Authorization containment is a DAG                                                            | 64         |
+| [ADR-017](#adr-017) | No scope exclusions                                                                           | 66         |
+| [ADR-018](#adr-018) | Every scope path has a tenant ancestor                                                        | 67         |
+| [ADR-019](#adr-019) | Cross-tenant authority is an explicit grant                                                   | 68         |
+| [ADR-020](#adr-020) | Ad-hoc scope collections deferred                                                             | 65         |
+| [ADR-021](#adr-021) | Relationship-derived permissions permitted                                                    | 9          |
+| [ADR-022](#adr-022) | Roles are reusable permission bundles                                                         | 10         |
+| [ADR-023](#adr-023) | Authorization vs domain eligibility split                                                     | 13, 49     |
+| [ADR-024](#adr-024) | OpenFGA knows only the authorization graph                                                    | 14         |
+| [ADR-025](#adr-025) | Postgres owns business state, OpenFGA owns relationships                                      | 28         |
+| [ADR-026](#adr-026) | Transactional outbox, not distributed transactions                                            | 29         |
+| [ADR-027](#adr-027) | Graded failure modes on authorization unavailability                                          | 30         |
+| [ADR-028](#adr-028) | Tenant isolation represented twice                                                            | 31         |
+| [ADR-029](#adr-029) | PostgreSQL row-level security                                                                 | 32         |
+| [ADR-030](#adr-030) | No PII in authorization tuples                                                                | —          |
+| [ADR-031](#adr-031) | Single OpenFGA store, tenant-namespaced                                                       | 90         |
+| [ADR-032](#adr-032) | JWTs carry identity, not permissions                                                          | —          |
+| [ADR-033](#adr-033) | Policy is a structured domain object                                                          | 18         |
+| [ADR-034](#adr-034) | Mandatory / default / local policy levels                                                     | 4          |
+| [ADR-035](#adr-035) | Mandatory policy cannot be overridden                                                         | 20         |
+| [ADR-036](#adr-036) | Inheritance semantics are per policy type                                                     | 21         |
+| [ADR-037](#adr-037) | Domain owns policy evaluation                                                                 | 19         |
+| [ADR-038](#adr-038) | Person is global, membership tenant-local                                                     | 22         |
+| [ADR-039](#adr-039) | Authentication identity is global                                                             | 23         |
+| [ADR-040](#adr-040) | Multiple deliberate principals permitted                                                      | 24         |
+| [ADR-041](#adr-041) | Person relationships are not subtypes                                                         | 37, 38, 39 |
+| [ADR-042](#adr-042) | Guardianship is separate from dependency                                                      | 96         |
+| [ADR-043](#adr-043) | Membership is distinct from enrollment                                                        | 40         |
+| [ADR-044](#adr-044) | Membership belongs to exactly one tenant                                                      | 41         |
+| [ADR-045](#adr-045) | Membership has a primary holder and dependents                                                | 75         |
+| [ADR-046](#adr-046) | Membership admission is an approval workflow                                                  | 76         |
+| [ADR-047](#adr-047) | Suspension is explicit, never derived                                                         | 77         |
+| [ADR-048](#adr-048) | No automatic age-band transition                                                              | 78         |
+| [ADR-049](#adr-049) | Verification is a first-class object                                                          | 79         |
+| [ADR-050](#adr-050) | Conferred memberships are distinct from purchased                                             | 80         |
+| [ADR-051](#adr-051) | Governance rights are a separate entitlement axis                                             | 83         |
+| [ADR-052](#adr-052) | Foreign membership recognition deferred                                                       | 42         |
+| [ADR-053](#adr-053) | Programme / offering / enrollment / occurrence                                                | 43         |
+| [ADR-054](#adr-054) | Offerings need not be commercial                                                              | 44         |
+| [ADR-055](#adr-055) | Pricing is a separate value object                                                            | 45         |
+| [ADR-056](#adr-056) | Resource is distinct from programme                                                           | 46, 47, 48 |
+| [ADR-057](#adr-057) | Resource entitlement is a relationship                                                        | 50         |
+| [ADR-058](#adr-058) | Booking and Stay are independent aggregates                                                   | 55         |
+| [ADR-059](#adr-059) | Allocation exclusivity enforced in the database                                               | 55c        |
+| [ADR-060](#adr-060) | Access mode is time-scoped, not resource-scoped                                               | 56         |
+| [ADR-061](#adr-061) | Walk-in capacity is not system-enforced                                                       | 57         |
+| [ADR-062](#adr-062) | Waitlist status reserved, feature deferred                                                    | 53, 59     |
+| [ADR-063](#adr-063) | Hostel stay requires approval                                                                 | 60         |
+| [ADR-064](#adr-064) | Allocation granularity varies by room type                                                    | 60         |
+| [ADR-065](#adr-065) | Actor and beneficiary may differ                                                              | 82         |
+| [ADR-066](#adr-066) | JIT privileged access, no standing superusers                                                 | 25, 26     |
+| [ADR-067](#adr-067) | Break-glass requires dual control                                                             | 26         |
+| [ADR-068](#adr-068) | Impersonation preserves both principals                                                       | 27         |
+| [ADR-069](#adr-069) | Term policy declared on the role definition                                                   | 87         |
+| [ADR-070](#adr-070) | Expiry evaluated at decision time                                                             | 87         |
+| [ADR-071](#adr-071) | Office is distinct from Role                                                                  | 88         |
+| [ADR-072](#adr-072) | Office-holding in scope, elections out                                                        | 88         |
+| [ADR-073](#adr-073) | Affiliation is a stateful relationship                                                        | 84         |
+| [ADR-074](#adr-074) | Affiliation state is recorded; sanction is explicit                                           | 84         |
+| [ADR-075](#adr-075) | Non-affiliated associations are first-class tenants                                           | 85         |
+| [ADR-076](#adr-076) | Permissions system-defined, roles tenant-configurable                                         | 69         |
+| [ADR-077](#adr-077) | Resource types declare behavioural archetypes                                                 | 70         |
+| [ADR-078](#adr-078) | No privilege escalation through role creation                                                 | 71         |
+| [ADR-079](#adr-079) | Role templates are cloned, not linked                                                         | 72         |
+| [ADR-080](#adr-080) | Role edits show blast radius and emit audit                                                   | 73         |
+| [ADR-081](#adr-081) | Membership plans are tenant-local                                                             | 74         |
+| [ADR-082](#adr-082) | Financial parties are generic                                                                 | 89         |
+| [ADR-083](#adr-083) | Composable charge components                                                                  | 81         |
+| [ADR-084](#adr-084) | Payment provider facade                                                                       | 11r        |
+| [ADR-085](#adr-085) | Inter-organizational dues deferred                                                            | 89         |
+| [ADR-086](#adr-086) | Store the verdict, not the evidence                                                           | 97         |
+| [ADR-087](#adr-087) | Clearance is a precondition on role assignment                                                | 92         |
+| [ADR-088](#adr-088) | Safeguarding compliance feeds affiliation standing                                            | 95         |
+| [ADR-089](#adr-089) | Allegation records are out of scope                                                           | 97         |
+| [ADR-090](#adr-090) | Member screening is jurisdiction-gated                                                        | 98         |
+| [ADR-091](#adr-091) | Screening never auto-acts                                                                     | 98         |
+| [ADR-092](#adr-092) | Staff membership is tenant policy                                                             | 24r        |
+| [ADR-093](#adr-093) | Retain everything, scrub PII, preserve audit                                                  | 5          |
+| [ADR-094](#adr-094) | Organizational units are one typed concept                                                    | 34         |
+| [ADR-095](#adr-095) | Org, physical and authorization containment differ                                            | 35, 36     |
+| [ADR-096](#adr-096) | Consumption is realization, distinct from reservation                                         | R1         |
+| [ADR-097](#adr-097) | Obligations are standing, never materialized                                                  | R1         |
+| [ADR-098](#adr-098) | Consumption records are corrected, never edited                                               | R1         |
+| [ADR-099](#adr-099) | Absence relief is snapshotted at declaration                                                  | R1         |
+| [ADR-100](#adr-100) | Consumption enters the charge vocabulary                                                      | R1         |
+| [ADR-101](#adr-101) | Async projection is fenced against synchronous removal                                        | R1         |
+| [ADR-102](#adr-102) | The reaching verbs are recorded, never graph-bearing                                          | R1         |
+| [ADR-103](#adr-103) | Invoice numbers come from a transactional counter                                             | R1         |
+| [ADR-104](#adr-104) | Lists authorize the scope, not the row                                                        | R1         |
+| [ADR-105](#adr-105) | The tenant is a path segment                                                                  | R1         |
+| [ADR-106](#adr-106) | Authentication is a port                                                                      | R1         |
+| [ADR-107](#adr-107) | Entitlement reaches a person by plan or by subscription                                       | R5         |
+| [ADR-108](#adr-108) | Tenant isolation rests on a role, not only on the schema                                      | R5         |
+| [ADR-109](#adr-109) | Role assignments resolved per check, never stored                                             | R8         |
+| [ADR-110](#adr-110) | The grantable set is declared by type restriction                                             | R8         |
+| [ADR-111](#adr-111) | The plane is a credential property; its zero value is tenant                                  | R10        |
+| [ADR-112](#adr-112) | Platform audit is isolated by privilege, not by policy                                        | R10        |
+| [ADR-113](#adr-113) | A tenant is provisioned with its first owner, or inert                                        | R10        |
+| [ADR-114](#adr-114) | Registering a person is a tenant permission on a global row                                   | R10        |
+| [ADR-115](#adr-115) | The DAG's invariants are enforced by the database, not the caller                             | R11        |
+| [ADR-116](#adr-116) | A period is closed once by a constraint, and the close serialises with the records it counts  | R13        |
+| [ADR-117](#adr-117) | Consumption hands off to Finance by a call inside the closing transaction                     | R13        |
+| [ADR-118](#adr-118) | A membership's coverage is revoked synchronously; its term is checked at decision time        | R13        |
+| [ADR-119](#adr-119) | "Today" is the tenant's: a zone on the tenant, and one place that turns an instant into a day | R14        |
 
 ---
 
@@ -2363,3 +2364,45 @@ read their own bills, because `invoice.payer` is not an entitlement. A commit
 that fails after the delete succeeds leaves a member under-covered, never
 over-covered: the failure is on the safe side and a retry heals it. The state
 machine's `LAPSED` is reserved and unused (11.2).
+
+---
+
+### ADR-119
+
+**"Today" is the tenant's: a zone on the tenant, and one place that turns an
+instant into a day** · Accepted · R14
+
+**Decision.** `tenant.time_zone` is an IANA region name, `UTC` until a tenant
+is given one, set at provisioning (`POST /platform/tenants`, optional
+`time_zone`). A trigger refuses anything that is not a region name present in
+the server's zone database; abbreviations (`EST`) and POSIX strings are
+refused because they mean a fixed offset and ignore daylight saving. Three SQL
+functions are the only place "which day is it" is derived — `tenant_today`,
+`tenant_day_start` and `tenant_utc_offset_seconds` — and every query that
+asked the question now calls them: the membership term (ADR-118), a role's
+required clearance, the "future" check on a consumption record, the correction
+window, where an ended membership's obligations stop, and the financial year
+an invoice number is allocated from (`financial_year`, a pure function of a
+day). `GET /t/{t}/me` returns `time_zone`, `today` and `utc_offset_seconds`,
+and the client turns any instant into the tenant's day with the offset alone.
+
+**Rationale.** A3.10 stored every day as a UTC midnight and let the caller
+state the date, which is right, and left "today" as the UTC day, which is not:
+a meal logged at 1am in Mumbai was recorded against yesterday, a membership
+ending on the 31st lapsed at 5:30 in the morning of the 31st, and an invoice
+issued after midnight on 1 April was numbered in the old financial year. The
+slack A3.10 allowed for the future check (a day ahead of UTC, "the widest zone
+offset") existed only because the zone was unknown.
+
+**Consequences.** Stored values keep their A3.10 representation. A date is
+still a UTC midnight where it has to be a timestamp, so an existing row means
+what it meant; only the question "what day is it now" moves, and a tenant at
+`UTC` behaves exactly as before. A tenant that does not exist has no day:
+`tenant_today` returns NULL and every comparison against it is false, so a
+term check fails closed. The functions are not `SECURITY DEFINER`, for
+ADR-115's reason. The client reads the offset in force when it signed in; a
+daylight-saving change during a session is corrected at the next sign-in, and
+the server's own checks never use the client's day. Changing a tenant's zone
+after the fact has no endpoint (11.2): an instant-to-day change moves what
+"today" means for periods already closed, which is an operator's decision
+about a specific tenant and not a setting.

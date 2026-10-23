@@ -137,6 +137,7 @@ CREATE TABLE tenant (
     legal_name      text NOT NULL,
     display_name    text NOT NULL,
     jurisdiction    text NOT NULL,       -- drives tax, screening, residency
+    time_zone       text NOT NULL DEFAULT 'UTC',  -- IANA region; what "today" means (ADR-119)
     status          text NOT NULL,       -- ACTIVE|SUSPENDED|ARCHIVED
     created_at      timestamptz NOT NULL DEFAULT now()
     -- NO parent_id. Relationships to other tenants exist only

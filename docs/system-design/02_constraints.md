@@ -39,7 +39,8 @@
 Documentation      arc42, C4 diagrams, ADRs, DDD vocabulary
 Format             Markdown, docs-as-code, reviewed by diff
 Identifiers        opaque UUIDs; no PII in identifiers or tuples
-Time               timestamptz UTC; display in the resource's timezone
+Time               timestamptz UTC; a calendar day is the tenant's (ADR-119);
+                   display in the resource's timezone
 Naming             the glossary (12) is binding, including its
                    list of terms deliberately not used
 ```

@@ -239,6 +239,7 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		errors.Is(err, finance.ErrInvalid),
 		errors.Is(err, httpx.ErrMissingIdempotencyKey),
 		errors.Is(err, organization.ErrOwnerSubjectTaken),
+		errors.Is(err, organization.ErrInvalidTimeZone),
 		errors.Is(err, organization.ErrInvalidUnitType),
 		errors.Is(err, organization.ErrInvalidParentType):
 		// A3.4: these name a value the caller supplied, so echoing it

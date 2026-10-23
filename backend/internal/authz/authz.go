@@ -199,7 +199,7 @@ var entitlementPermissions = map[string]bool{
 }
 
 // hasValidMembership is the decision-time term check: an ACTIVE membership in
-// this tenant whose term covers today. In PostgreSQL, with no sweeper — 8.7
+// this tenant whose term covers today, where the tenant is (ADR-119). In PostgreSQL, with no sweeper — 8.7
 // forbids one noticing that a term ended, and A1.5 puts term windows here.
 func hasValidMembership(ctx context.Context, tx pgx.Tx, tenantID, personID string) (bool, error) {
 	var valid bool
@@ -207,8 +207,8 @@ func hasValidMembership(ctx context.Context, tx pgx.Tx, tenantID, personID strin
 		SELECT EXISTS (
 		    SELECT 1 FROM membership
 		     WHERE tenant_id = $1 AND person_id = $2::uuid AND state = 'ACTIVE'
-		       AND (valid_from IS NULL OR valid_from <= (now() AT TIME ZONE 'UTC')::date)
-		       AND (valid_until IS NULL OR valid_until >= (now() AT TIME ZONE 'UTC')::date))
+		       AND (valid_from IS NULL OR valid_from <= tenant_today($1::uuid))
+		       AND (valid_until IS NULL OR valid_until >= tenant_today($1::uuid)))
 	`, tenantID, personID).Scan(&valid)
 	return valid, err
 }

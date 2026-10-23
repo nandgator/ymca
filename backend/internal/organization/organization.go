@@ -39,6 +39,7 @@ type Tenant struct {
 	LegalName    string `json:"legal_name"`
 	DisplayName  string `json:"display_name"`
 	Jurisdiction string `json:"jurisdiction"`
+	TimeZone     string `json:"time_zone"`
 	Status       string `json:"status"`
 	Owner        Owner  `json:"owner"`
 }
@@ -48,6 +49,7 @@ type NewTenant struct {
 	LegalName        string
 	DisplayName      string
 	Jurisdiction     string
+	TimeZone         string // IANA region; empty means UTC (ADR-119)
 	OwnerDisplayName string
 	OwnerIDPSubject  string
 }
@@ -79,11 +81,16 @@ func CreateTenant(ctx context.Context, tx pgx.Tx, in NewTenant) (Tenant, error) 
 	}
 
 	err := tx.QueryRow(ctx, `
-		INSERT INTO tenant (id, legal_name, display_name, jurisdiction, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'ACTIVE')
-		RETURNING id::text, status
-	`, in.LegalName, in.DisplayName, in.Jurisdiction).Scan(&t.ID, &t.Status)
+		INSERT INTO tenant (id, legal_name, display_name, jurisdiction, time_zone, status)
+		VALUES (gen_random_uuid(), $1, $2, $3, COALESCE(NULLIF($4, ''), 'UTC'), 'ACTIVE')
+		RETURNING id::text, time_zone, status
+	`, in.LegalName, in.DisplayName, in.Jurisdiction, in.TimeZone).Scan(&t.ID, &t.TimeZone, &t.Status)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == checkViolation &&
+			pgErr.ConstraintName == "tenant_time_zone_known" {
+			return Tenant{}, ErrInvalidTimeZone
+		}
 		return Tenant{}, fmt.Errorf("organization: create tenant: %w", err)
 	}
 

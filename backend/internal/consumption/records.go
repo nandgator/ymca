@@ -173,11 +173,11 @@ func RecordUse(ctx context.Context, tx pgx.Tx, tenantID string, in NewRecord) (R
 	if err != nil {
 		return Record{}, err
 	}
-	// More than a day ahead of UTC is the future whatever the tenant's zone:
-	// one day of slack is the widest zone offset (A3.10).
+	// The future is a day after today where the tenant is (ADR-119). The
+	// slack this check once carried, because the zone was unknown, is gone.
 	var future bool
 	if err := tx.QueryRow(ctx,
-		`SELECT $1::date > (now() AT TIME ZONE 'UTC')::date + 1`, day).Scan(&future); err != nil {
+		`SELECT $1::date > tenant_today($2::uuid)`, day, tenantID).Scan(&future); err != nil {
 		return Record{}, fmt.Errorf("consumption: compare day: %w", err)
 	}
 	if future {
@@ -287,7 +287,7 @@ func PeekHead(ctx context.Context, tx pgx.Tx, tenantID, recordID string) (Head, 
 	err := tx.QueryRow(ctx, `
 		SELECT r.consumption_type_id::text,
 		       t.correction_window IS NOT NULL AND
-		       (r.occurred_on::timestamp AT TIME ZONE 'UTC') + t.correction_window < now()
+		       tenant_day_start(r.tenant_id, r.occurred_on) + t.correction_window < now()
 		  FROM consumption_record r
 		  JOIN consumption_type t ON t.id = r.consumption_type_id
 		 WHERE r.id = $1::uuid AND r.tenant_id = $2
@@ -324,7 +324,7 @@ func Correct(
 		SELECT r.consumption_type_id::text, r.subject_person_id::text,
 		       to_char(r.occurred_on, 'YYYY-MM-DD'), r.obligation_id::text, r.voided,
 		       t.correction_window IS NOT NULL AND
-		       (r.occurred_on::timestamp AT TIME ZONE 'UTC') + t.correction_window < now()
+		       tenant_day_start(r.tenant_id, r.occurred_on) + t.correction_window < now()
 		  FROM consumption_record r
 		  JOIN consumption_type t ON t.id = r.consumption_type_id
 		 WHERE r.id = $1::uuid AND r.tenant_id = $2

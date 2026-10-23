@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/nandgator/ymca/backend/internal/authz"
 	"github.com/nandgator/ymca/backend/internal/db"
 	"github.com/nandgator/ymca/backend/internal/httpx"
@@ -35,6 +37,13 @@ type meResponse struct {
 	PersonID    string   `json:"person_id"`
 	TenantID    string   `json:"tenant_id"`
 	Permissions []string `json:"permissions"`
+
+	// The tenant's calendar (ADR-119). A client has no zone database, so it
+	// is told the zone, today's date there, and the offset in force now; a
+	// client turns any instant into the tenant's day from the offset alone.
+	TimeZone         string `json:"time_zone"`
+	Today            string `json:"today"`
+	UTCOffsetSeconds int    `json:"utc_offset_seconds"`
 }
 
 func handleMe(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
@@ -72,12 +81,31 @@ func handleMe(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc
 			}
 		}
 
+		var cal struct {
+			zone, today string
+			offset      int
+		}
+		if err := pool.InTenantTx(r.Context(), tenantID, func(tx pgx.Tx) error {
+			return tx.QueryRow(r.Context(), `
+				SELECT time_zone, tenant_today(id)::text, tenant_utc_offset_seconds(id)
+				  FROM tenant WHERE id = $1::uuid`, tenantID).Scan(&cal.zone, &cal.today, &cal.offset)
+		}); err != nil {
+			logger.ErrorContext(r.Context(), "read tenant calendar",
+				"error", err, "request_id", requestID)
+			httpx.WriteError(w, httpx.CodeInternal, "could not read the tenant")
+			return
+		}
+
 		httpx.WriteJSON(w, http.StatusOK, meResponse{
 			PrincipalID: principal.ID,
 			Kind:        string(principal.Kind),
 			PersonID:    principal.PersonID,
 			TenantID:    tenantID,
 			Permissions: granted,
+
+			TimeZone:         cal.zone,
+			Today:            cal.today,
+			UTCOffsetSeconds: cal.offset,
 		})
 	}
 }

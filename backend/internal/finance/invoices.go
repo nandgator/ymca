@@ -244,15 +244,12 @@ func Issue(
 		return Invoice{}, ErrInvoiceEmpty
 	}
 
-	// The financial year starts in April for every tenant (A3.11, 11.2).
+	// The financial year starts in April for every tenant, on the tenant's own
+	// calendar (A3.11, ADR-119).
 	var series string
 	if err := tx.QueryRow(ctx, `
-		WITH t AS (SELECT now() AT TIME ZONE 'UTC' AS at),
-		     fy AS (SELECT CASE WHEN extract(month FROM at) >= 4
-		                        THEN extract(year FROM at)::int
-		                        ELSE extract(year FROM at)::int - 1 END AS y FROM t)
-		SELECT y::text || '-' || lpad(((y + 1) % 100)::text, 2, '0') FROM fy
-	`).Scan(&series); err != nil {
+		SELECT financial_year(tenant_today($1::uuid))
+	`, tenantID).Scan(&series); err != nil {
 		return Invoice{}, fmt.Errorf("finance: financial year: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `

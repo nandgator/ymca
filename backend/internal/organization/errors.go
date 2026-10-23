@@ -13,6 +13,10 @@ var ErrNotFound = errors.New("organization: not found")
 // supplied, so echoing it discloses nothing they did not already send.
 var ErrOwnerSubjectTaken = errors.New("organization: owner idp_subject already identifies a principal")
 
+// ErrInvalidTimeZone is A3.4's invalid_request for a tenant time zone that is
+// not an IANA region name (ADR-119). The value is the caller's own.
+var ErrInvalidTimeZone = errors.New("organization: not an IANA time zone")
+
 // ErrInvalidUnitType is A3.4's invalid_request for a unit type outside
 // 05.1.2's six. The value is the caller's own, so the message may name it.
 var ErrInvalidUnitType = errors.New("organization: not an organizational unit type")
