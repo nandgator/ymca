@@ -1,8 +1,9 @@
 # Handoff — YMCA Platform
 
-Current as of 2026-10-23, end of the eighth working session — the one that
-finished the slice. Written so that state can be picked up by another session
-or another person.
+Current as of 2026-10-23, end of the ninth working session — the one that
+closed the slice's loose ends (a login for a member, the tenant's own day,
+credit notes, plan lifecycle, a reconciler). Session 8 finished the slice.
+Written so that state can be picked up by another session or another person.
 
 **Untracked by intent**, like `REVIEW.md` and `ORCHESTRATION.md`. Not part of
 the design record.
@@ -23,7 +24,33 @@ a bursar issues and settles the invoice that falls out. Eight migrations,
 118 ADRs, a CI workflow, and a Flutter client for web, Android and Linux. It was driven end to end in a real browser
 against a real server before this was written.
 
-**Thirteen commits this session** (`a29b61c..HEAD`): 131 files, 15,255 insertions
+**Session 9 — eight commits on top of session 8's** (`d4684f7..HEAD`), each
+with its tests, its ADR and its doc changes in the same commit:
+
+```txt
+feat(ops): reconcile-coverage compares PostgreSQL with the graph (ADR-122)
+feat: an invoice list shows its balance, and the directory says when a term has ended
+feat(membership): a plan is closed, replaced and retired, and a holder moves explicitly (ADR-121)
+feat(app): staff issue credit notes, and a payer sees them
+feat(finance): a credit note corrects an issued invoice (ADR-120)
+feat(app): the day is the tenant's, not the device's or UTC's
+feat(backend): a tenant has a time zone, and today is the tenant's (ADR-119)
+feat(backend): bootstrap-principal gives a registered person a login
+```
+
+Migrations 0009 (tenant time zone), 0010 (credit notes, `VOIDED`) and 0011
+(plan lifecycle) are applied; the total is eleven. Four ADRs, 119–122.
+
+**Nothing is pushed and this clone has no remote** — `git remote -v` is empty,
+so `origin/main` does not exist here. The CI workflow has still never run on
+GitHub; it was reviewed against the commands run locally and now also checks
+that the suite leaves no tenant and that the graph and database agree.
+
+**The commits' author was rewritten** to `nandgator` (the identity of every
+earlier commit) before this was written, and the repo-local git config now
+carries it. No commit message, comment or document names a tool as author.
+
+**Thirteen commits in session 8** (`a29b61c..d4684f7`): 131 files, 15,255 insertions
 across `backend/`, `app/`, `docs/` and `.github/`:
 
 ```txt
@@ -51,7 +78,41 @@ and watch (§8).
 **`.gitignore` carries an unrelated `.codegraph` line** added by tooling, not
 by this work. Left unstaged deliberately, now across eight sessions.
 
-**Verified working right now**, not merely written:
+**Verified working right now**, not merely written — in a cloud container with
+no podman, rebuilt as below. Every Go test run was on PostgreSQL 18.6 and
+OpenFGA 1.22.0, both the latest stable at the time:
+
+```txt
+go build ./... && go vet ./...                      clean, also -tags dev and 'integration dev'
+gofmt -l backend                                    clean
+go test ./...                                       unit + the A1.8 sync guards
+go test -tags 'integration dev' -p 1 ./...          every package, run twice, zero tenants left
+go run ./cmd/fga test                               47/47 (assertions unchanged this session)
+go run ./cmd/api reconcile-coverage                 0 disagreements
+TestFlutterClientAgreesWithTheServer                PASSES — first time the Dart half ran here
+flutter analyze / dart format / flutter test        clean / clean / 101 pass, 1 skip (live test, by design)
+bunx prettier --check / markdownlint-cli2           0 issues on every changed file
+```
+
+**Rebuilding the environment in a fresh container** (nothing here persists):
+
+```txt
+postgres 18   curl the zonky jar from Maven Central
+              (io/zonky/test/postgres/embedded-postgres-binaries-linux-amd64/18.6.0), unzip, tar -xJf the
+              .txz into /opt/pg18; initdb as the `postgres` user in /opt/pg18data with -U pgadmin
+              --auth=trust; start on :5432. NOT under /tmp/claude-0 — that directory is 0700 and
+              the postgres user cannot reach it. Then: create database ymca; run cmd/migrate up as
+              pgadmin; CREATE ROLE ymca_api LOGIN PASSWORD 'ci-api' IN ROLE ymca_app.
+openfga       GOBIN=<dir> go install github.com/openfga/openfga/cmd/openfga@latest ; `openfga run`
+              (in-memory) ; `go run ./cmd/fga apply` prints the store and model ids to export.
+flutter       curl the stable archive named in
+              storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+              into /opt/flutter; add /opt/flutter/bin to PATH; set YMCA_REQUIRE_FLUTTER=1.
+github.com, ftp.postgresql.org and apt.postgresql.org are refused by the proxy;
+proxy.golang.org, repo1.maven.org, storage.googleapis.com and registry.npmjs.org work.
+```
+
+The table below is session 8's, from Joe's machine, kept for the commands:
 
 ```txt
 go build ./... && go vet ./...                      clean, also -tags dev and integration
@@ -120,16 +181,30 @@ orphaned and harmless. Left rather than deleted unprompted; ask Joe.
 
 ## 2. Sessions
 
-| Session                                | Relationship           | Notes                                                  |
-| -------------------------------------- | ---------------------- | ------------------------------------------------------ |
-| `82f4fa32`                             | this one, session 8    | consumption to cash, the app, CI, lifecycle; R13       |
-| `2d515af4`                             | predecessor, session 7 | admission, A3.6's scope, the 22P02 fix; R12            |
-| `86435294`                             | predecessor, session 6 | people, units, the DAG invariants; R11                 |
-| `dfa63480`                             | predecessor, session 5 | step 8.3.5, the platform plane; R10                    |
-| `bd9ff2b3`                             | predecessor, session 4 | B7; step 8.2.5; 8.3 foundations + config; R8 and R9    |
-| `0e7d0387`                             | predecessor, session 3 | backend step 8.2; record reconciliation; R7            |
-| `68adc319`                             | predecessor, session 2 | backend step 8.1; A1/A2 reconciliation; R5 and R6      |
-| `Conventional commit message [0b3288]` | predecessor, session 1 | design review R1–R4, all doc commits through `7738a77` |
+| Session                                | Relationship           | Notes                                                    |
+| -------------------------------------- | ---------------------- | -------------------------------------------------------- |
+| (this clone, no id recorded)           | this one, session 9    | login command, time zone, credit notes, plans, reconcile |
+| `82f4fa32`                             | predecessor, session 8 | consumption to cash, the app, CI, lifecycle; R13         |
+| `2d515af4`                             | predecessor, session 7 | admission, A3.6's scope, the 22P02 fix; R12              |
+| `86435294`                             | predecessor, session 6 | people, units, the DAG invariants; R11                   |
+| `dfa63480`                             | predecessor, session 5 | step 8.3.5, the platform plane; R10                      |
+| `bd9ff2b3`                             | predecessor, session 4 | B7; step 8.2.5; 8.3 foundations + config; R8 and R9      |
+| `0e7d0387`                             | predecessor, session 3 | backend step 8.2; record reconciliation; R7              |
+| `68adc319`                             | predecessor, session 2 | backend step 8.1; A1/A2 reconciliation; R5 and R6        |
+| `Conventional commit message [0b3288]` | predecessor, session 1 | design review R1–R4, all doc commits through `7738a77`   |
+
+**Session 9 used small workers for mechanical work only and kept every
+correctness-bearing piece in the foreground.** Four jobs went out, each with a
+command as its acceptance: an inventory of every place the code decides what day
+it is (112 call sites, classified), a review of `ci.yml` against what ran
+locally, installing a Flutter SDK and running the app's baseline, and the
+prettier/markdownlint gate over the changed documents. All four were read-only or
+gated by an exit code, and none was asked to write a test. Two were checked
+against the repository afterwards (the inventory's counts and the CI review's
+`sed` claim); the inventory also noticed a hard-coded month in a test that would
+have failed on 1 November, which was then fixed. Everything that changes a
+decision — the migrations, the SQL, the handlers, the screens and every test —
+was written and drift-tested in the foreground.
 
 **Session 8 used three Haiku subagents, once each, and never resumed them.**
 They built the six Flutter screens against a fixed contract (the API interface,
@@ -211,6 +286,9 @@ These came from Joe and hold for whoever continues.
 | **A test goroutine holding a transaction releases it in a cleanup.**                           | session 8; `TestClose_WaitsForTheSubjectLock`           |
 | **Two guards with one status code shadow each other; test each where the other cannot reach.** | session 8; see below                                    |
 | **Run the real thing: cold start, a browser, the other language's client.**                    | session 8; see below                                    |
+| **Code that decides a day is tested in two zones, +14 and -11.**                               | session 9; `time_zone_integration_test.go`              |
+| **A harness cleanup reports a tenant it cannot delete.**                                       | session 9; `harness_integration_test.go`                |
+| **A guard that nothing can fail is not written** (session 9 deleted one)                       | session 9; `SupersedePlan`                              |
 | No `Co-Authored-By` trailer in commit messages                                                 | memory `no-co-authored-by-trailer.md`                   |
 | A code fence that cannot be classified uses `txt`                                              | memory `txt-for-unclassified-code-fences.md`            |
 | `REVIEW.md` and `HANDOFF.md` stay untracked                                                    | stated in-session                                       |
@@ -330,6 +408,30 @@ and not by judgement. Even then its tests are the part to distrust: three
 workers produced tests that passed with the guard removed. Never resume a worker
 by message (it comes back on the parent's model).
 
+_Session 9, each from a thing that went wrong or nearly did._
+
+_A test that discriminates only part of the day._ Kiritimati (UTC+14) and Pago
+Pago (UTC-11) are never both on the UTC date, so a test that runs both fails for
+a site that went back to UTC at every hour the suite could run. One zone alone
+does so for about half of them. The same pair is used in Go and in Dart, and one
+Dart test takes an injected clock so a month boundary can be crossed on purpose.
+
+_A guard that was dead code._ `SupersedePlan` first refused a successor that was
+`OPEN` and replaced; removing the second clause left everything green, because a
+replaced plan is always closed (a CHECK in migration 0011) and the status clause
+answered first. It is gone, with a comment saying why. This is the session 8 rule
+("if removing a guard leaves everything green there are two of it, or none")
+applied to a guard I had written an hour earlier.
+
+_A harness that hid a leak._ A new tenant-scoped table made the tenant
+undeletable and the test passed anyway, because the harness ignored the result of
+its own `DELETE FROM tenant`. Found when the next run failed on a duplicate key.
+It reports now, and the CI workflow fails on a tenant left behind.
+
+_A refusal found by the other language._ The first live credit note in the Dart
+contract test asked for 100.00 against a smaller invoice and the server said
+`credit_exceeds_invoice` — through the real client, and not as a unit test.
+
 **On divergence.** Session 2 shipped `56a671e` with a "deviations from the
 design record" section listing things the code did that the record did not
 say. Joe's response was to close them before proceeding, not to carry them.
@@ -422,7 +524,7 @@ Four things about this cluster that shape the code:
 
 ## 5. Decisions on the record
 
-Eighteen ADRs added across sessions 1, 2, 4, 5, 6 and 8, taking the total to 118. **Session 7 added none.** Session 8 added three (116–118), each a decision
+Twenty-two ADRs added across sessions 1, 2, 4, 5, 6, 8 and 9, taking the total to 122. **Session 7 added none.** Session 9 added four (119–122, below the table). Session 8 added three (116–118), each a decision
 the record had left open or contradicted: how a period closes exactly once, how
 Consumption hands off to Finance without an event bus, and how a membership's
 coverage ends — where 05.3.10 said suspension is "consulted after the graph"
@@ -473,6 +575,10 @@ derived                              plan.duration is plan-lifecycle logic
 | 116 | A period is closed once by a constraint, and serialises with the records it counts     | 8       |
 | 117 | Consumption hands off to Finance by a call inside the closing transaction              | 8       |
 | 118 | A membership's coverage is revoked synchronously; its term is checked at decision time | 8       |
+| 119 | "Today" is the tenant's: a zone on the tenant and one place that derives a day         | 9       |
+| 120 | An issued invoice is corrected by a credit note with its own number                    | 9       |
+| 121 | A plan is closed, replaced and retired, never edited; a holder moves explicitly        | 9       |
+| 122 | PostgreSQL and the graph are compared by a command that reports before it repairs      | 9       |
 
 Ten carry implementation obligations that are easy to get wrong.
 
@@ -567,6 +673,34 @@ decision time, for the person route on entitlement permissions only. A
 principal's authority and a payer's right to read their bills do not depend on
 membership. Assert revocation at the graph, not through the API.
 
+**ADR-119 — three functions are the only place a day is derived.**
+`tenant_today`, `tenant_day_start` and `tenant_utc_offset_seconds` (migration
+0009). A new query that needs "today" calls them; one that writes
+`now() AT TIME ZONE 'UTC'` or `current_date` reintroduces the bug the ADR fixed
+and no existing test will say so unless it is run in two zones. Stored dates keep
+A3.10's representation (a UTC midnight where a timestamp is needed); only the
+question of which day it is _now_ moved. A tenant that does not exist has no day
+(NULL), so a term check fails closed. The zone has no endpoint to change it.
+
+**ADR-120 — the balance is derived, and `VOIDED` is reached only by a credit
+note.** `balance = total - payments - credit notes`, computed on every read, and
+negative means a refund is due; nothing moves that money. A payment is measured
+against what the invoice asks for _after_ its credits, so `RecordPayment` and
+`IssueCreditNote` both lock the invoice row. The credit number is drawn last, as
+ADR-103 requires, from its own series (`kind = CREDIT_NOTE`).
+
+**ADR-121 — admission share-locks the plan row.** `FOR SHARE OF p` in `Admit`'s
+`INSERT ... SELECT` is what stops a retire overtaking an admission in flight; it
+looks removable and no test would notice (it is not tested under concurrency).
+Moving an `ACTIVE` member runs ADR-118's revocation path for the plan they leave:
+`Void` first (it takes the fence lock), then the state change, then the
+synchronous delete, then the grant for the new plan.
+
+**ADR-122 — a repair is an authorization change.** The default is to report.
+`UNEXPECTED` repairs revoke on the synchronous path and roll the tenant's
+transaction back if the delete fails; `MISSING` repairs enqueue, so they lag a
+dispatch like any grant. A grant already pending is not drift.
+
 **ADR-108 — three silent ways to have no isolation.** No `FORCE` (the table
 owner is exempt), superuser, or `BYPASSRLS`. None produces an error. Verify
 per environment with four queries rather than assuming; `backend/README.md`
@@ -600,7 +734,12 @@ OpenFGA from day one. Greenfield `backend/`; `prototype/` is reference only.
 8.3+  membership lifecycle, synchronous revocation   DONE  1c57c37 (ADR-118)
 8.3+  the first operator, and CORS                   DONE  6cd409b
 8.4   the Flutter app                                DONE  7a01600, d6d92c7, c3c36f3
-7.5   CI                                             WRITTEN, NEVER RUN  59f53f2
+7.5   CI                                             WRITTEN, NEVER RUN  59f53f2, and session 9
+9.1   bootstrap-principal                            DONE
+9.2   tenant time zone (ADR-119)                     DONE  migration 0009, /me, app calendar
+9.3   credit notes (ADR-120)                         DONE  migration 0010, app dialog
+9.4   plan lifecycle + moving a holder (ADR-121)     DONE  migration 0011, API only
+9.5   reconcile-coverage (ADR-122)                   DONE  membership coverage only
 ```
 
 ### The backend, as built
@@ -620,10 +759,14 @@ backend/
     consumption_handlers.go   A3.10 — and the one place Consumption meets Finance
     finance_handlers.go       A3.11
     bootstrap.go              bootstrap-operator (NOT behind the dev tag)
+    bootstrap_principal.go    bootstrap-principal <person-id> <idp-subject>
+    reconcile.go              reconcile-coverage [--repair]
     devtoken.go               mint-token — //go:build dev
   migrations/                 0001 schema, 0002 roles, 0003 idempotency,
                               0004 platform, 0005 DAG invariants, 0006 consumption,
-                              0007 finance, 0008 membership lifecycle
+                              0007 finance, 0008 membership lifecycle,
+                              0009 tenant time zone, 0010 credit notes,
+                              0011 plan lifecycle
   fga/                        model.fga (extracted from A1.2, byte-checked),
                               assertions.yaml (47), sync_test.go, grantable_test.go
   internal/
@@ -822,46 +965,63 @@ Ordered as `REVIEW.md` §5 orders it: after the slice comes
 `A2 -> B4 -> B5 -> B6 -> B7 -> B8 -> C*`. The slice is done, so this is the
 order of the next work.
 
-| Ref | Open item                                                                                                                                                                 |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A2  | Cached ALLOW (6.9) contradicts synchronous revocation (8.3). **Sharper now:** ADR-118's revocation and ADR-109's per-check roles both die the moment a decision is cached |
-| B4  | Notification — required by five sections, owned by nobody. C8 is regulatory                                                                                               |
-| B5  | Tenant onboarding and bulk import; conflicts with gapless invoice numbering                                                                                               |
-| B6  | Inter-context event bus — 05.0.8 assumes one. **ADR-117 and the terminate handler are the two call sites it would replace**                                               |
-| B7  | Operator/admin CLI. `bootstrap-operator` is its first command and the only one; configuration still goes through the API                                                  |
-| B8  | Plan lifecycle over the API — supersession, retirement, `CLOSED_TO_NEW` (05.3.2)                                                                                          |
-| C1  | No PostgreSQL↔OpenFGA reconciler. **ADR-118 makes it matter more**: a commit that fails after the delete leaves a member under-covered until someone retries              |
-| C2  | `may_review_compliance` produces nothing defined                                                                                                                          |
-| C3  | No scale figures                                                                                                                                                          |
-| C4  | No observability beyond audit — including no dispatcher metrics                                                                                                           |
-| C5  | No rate limiting or abuse model                                                                                                                                           |
+| Ref | Open item                                                                                                                                                                                |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A2  | Cached ALLOW (6.9) contradicts synchronous revocation (8.3). **Sharper now:** ADR-118's revocation and ADR-109's per-check roles both die the moment a decision is cached                |
+| B4  | Notification — required by five sections, owned by nobody. C8 is regulatory                                                                                                              |
+| B5  | Tenant onboarding and bulk import; conflicts with gapless invoice numbering                                                                                                              |
+| B6  | Inter-context event bus — 05.0.8 assumes one. **ADR-117 and the terminate handler are the two call sites it would replace**                                                              |
+| B7  | Operator/admin CLI. Three commands now (`bootstrap-operator`, `bootstrap-principal`, `reconcile-coverage`); configuration still goes through the API                                     |
+| C1  | **Narrowed, not closed.** `reconcile-coverage` compares a membership's three tuples. Units, plans, bundles, invoices and tuples whose row is gone are not compared; nothing schedules it |
+| C2  | `may_review_compliance` produces nothing defined                                                                                                                                         |
+| C3  | No scale figures                                                                                                                                                                         |
+| C4  | No observability beyond audit — including no dispatcher metrics                                                                                                                          |
+| C5  | No rate limiting or abuse model                                                                                                                                                          |
 
-**Closed this session:** consumption, finance, `/me`, the Flutter app, CI as a
+**Closed in session 9:** a login for a registered person (a command, not an
+endpoint), the tenant time zone, credit notes and the `VOIDED` state, plan
+lifecycle (B8) and moving a holder, the invoice list's missing balance, a
+directory that says when a term has ended, and a reconciler for membership
+coverage.
+
+**Closed in session 8:** consumption, finance, `/me`, the Flutter app, CI as a
 file, the first operator, CORS, and the largest gap session 7 opened — nothing
 revoked a membership's tuples. Admission, consumption and finance each now have
 a writer for every relation they declare.
 
+**Opened in session 9**, each deliberate and written in `11.2`:
+
+- **A tenant's time zone cannot be changed**, only set at provisioning.
+- **No refunds.** A credit note after payment leaves a negative balance and
+  nothing moves the money back.
+- **Plan lifecycle and moving a holder are API only**; the app has no plan
+  screen, and there is no "move everyone on plan A".
+- **The reconciler is membership-only and unscheduled.**
+- **The `FOR SHARE` on admission and the invoice row lock are not tested under
+  concurrency.** They are the mechanism; no test races them.
+- **The Dart date pickers' fix (`pickedDay`) is unit-tested, not driven through
+  a picker**, and a test machine in UTC would not discriminate it anyway.
+
 **Opened this session**, all in `11.2`, each a thing the code deliberately does
 not do rather than a thing nobody noticed:
 
-- **No way to give a registered person a login.** `POST /people` creates a
-  person and nothing creates a `principal`; `idp_subject` comes from the identity
-  provider, which does not exist yet. A member can be admitted and cannot sign
-  in. The development environment seeds principals with SQL. **This is what
-  stands between the platform and a first real tenant.**
+- **A login is made by a command, and the identity-provider adapter does not
+  exist.** `bootstrap-principal` binds a subject to a person; `POST /people`
+  still creates no principal. **A real identity provider (Cognito, Supabase or
+  Appwrite behind ADR-106's port) is what stands between the platform and a
+  first real tenant**, and it is a choice for Joe — nothing in the record
+  chooses one.
 - **A new object is unreadable until the dispatcher runs** (ADR-101's lag): an
   administrator who defines a type and immediately adds an option, or closes a
   period and immediately opens the invoice, gets a 403 for a few seconds.
 - **Nothing sets a membership `LAPSED` and nothing renews one.** A term that
-  ends is enforced at decision time and the state stays `ACTIVE`, so the
-  directory shows a lapsed member as active.
+  ends is enforced at decision time and the state stays `ACTIVE`; the directory
+  now reports `in_term` and the app labels such a member TERM ENDED, but no
+  renewal workflow exists.
 - **Suspension and termination need `tenant:admin`**; a bursar who issues
   arrears suspensions needs a finer relation (ADR-110's three places).
-- **No credit notes and no void**, though A2.8 promises them; a wrong issued
-  invoice has no correction path, and a correction inside a closed period is
-  refused (`period_closed`).
-- **No tenant time zone.** Every date is a UTC midnight; the app counts "today"
-  as the UTC day.
+- **Credit notes exist (ADR-120); refunds do not.** A correction inside a closed
+  period is now done with a credit note.
 - **Consumption:** no variant catalogue (a variant is a label, a surcharge is an
   option with the same code); option prices are live, not snapshotted; no
   self-correction; the subject's `NO_RESOURCE_ACCESS` restriction is not checked
@@ -872,7 +1032,6 @@ not do rather than a thing nobody noticed:
   close), no tax, an April financial year for every tenant, no instalments.
 - **A warden who may record for others cannot search the member directory**
   (`may_approve_membership` gates it).
-- **The invoice list carries no balance**; the detail does.
 - **The app stores its token in preferences.** A real provider's token belongs
   in secure storage; there is no iOS or macOS target; the web build needs its
   origin in `YMCA_CORS_ORIGINS`.
@@ -914,22 +1073,28 @@ have to run `lifecycle.go`'s shape: void, mark, delete, roll back on failure.
 ## 8. Immediate next actions
 
 ```txt
-1  Push, and watch CI. The workflow has never run. Expect to fix it: it was
-     written from what ran locally, step by step, and three things in it are
-     unverified — the openfga container startup (in-memory datastore), the
-     `ymca_api` role creation after migration 0001, and the Flutter install
-     the contract test depends on (YMCA_REQUIRE_FLUTTER makes it fail, not skip).
-2  Provision principals. Without it a member can be admitted and cannot sign in.
-     The identity-provider adapter (Cognito, Supabase or Appwrite — ADR-106's
-     port) is the real answer; a `bootstrap-principal` command in the style of
-     `bootstrap-operator` is the stopgap.
-3  Rotate or drop the throwaway ymca_api dev password (§4).
-4  Plan lifecycle (B8) and credit notes — the two things an administrator will
-     reach for in the first month and find missing.
-5  A tenant time zone, before the first tenant that is not at UTC+5:30 notices
-     that "today" is not their day.
-6  Optional, 30 seconds: 16 orphaned DISPATCHED outbox rows from sessions 5 and
-     6. Harmless; ask Joe first.
+1  Push, and watch CI. This clone has no remote; add one, push, and read the
+     first run. Three things in the workflow are still unverified on GitHub: the
+     openfga container (in-memory datastore), the `ymca_api` role creation after
+     migration 0001, and the Flutter install the contract test depends on
+     (YMCA_REQUIRE_FLUTTER makes it fail, not skip). Session 9 ran every one of
+     those steps' commands locally on the same versions, and added three steps:
+     no tenant left behind, `reconcile-coverage`, and a 20-minute test timeout.
+2  Choose an identity provider (ADR-106's port) and write its adapter. Until
+     then `bootstrap-principal` is how a member gets a login. This is the gate
+     to a first real tenant, and it is Joe's choice.
+3  Rotate or drop the throwaway ymca_api dev password (§4) — on Joe's machine;
+     the container used for session 9 had its own, discarded with it.
+4  Refunds. A credit note after payment leaves a negative balance and nothing
+     moves the money; a refund is a payment in reverse (05.8.6) and wants its
+     own state, endpoint and reconciliation.
+5  A plan screen in the app, and a way to change a tenant's time zone that an
+     operator can audit (ADR-119's consequences say why it is not a setting).
+6  Extend the reconciler beyond membership coverage, and schedule it.
+7  A finer relation than tenant:admin for suspending (ADR-110's three places):
+     a bursar who issues arrears suspensions should not need to administer.
+8  Optional, 30 seconds: 16 orphaned DISPATCHED outbox rows from sessions 5 and
+     6 on Joe's database. Harmless; ask Joe first.
 ```
 
 **Before touching `internal/authz`**, read the three load-bearing orderings in
@@ -942,6 +1107,13 @@ keys paragraph in `app/README.md`: a key belongs to the request, and the same ke
 with a different body is a refusal. **Before touching membership lifecycle**,
 read `lifecycle.go`'s header: Void comes before the state change because it takes
 the fence lock, and revocation is asserted at the graph.
+
+**Before adding a query that needs "today"** (ADR-119), call `tenant_today`;
+never `now() AT TIME ZONE 'UTC'` or `current_date`. **Before touching plan
+admission or `MovePlan`** (ADR-121), read the share lock in `Admit` and the
+order in `MovePlan`: Void, state change, synchronous delete, then the new grant.
+**Before adding a tenant-scoped table**, add its delete to the harness `purge`,
+or the next run fails on a tenant it cannot remove.
 
 **Before adding any permission a role should confer** (ADR-110): three places —
 A1.2's type restriction, a migration's `grantable_permission` seed, and an
