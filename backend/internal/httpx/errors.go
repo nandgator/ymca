@@ -43,6 +43,7 @@ const (
 	CodeInvoiceWrongState      Code = "invoice_wrong_state"
 	CodeInvoiceEmpty           Code = "invoice_empty"
 	CodePaymentExceedsBalance  Code = "payment_exceeds_balance"
+	CodeCreditExceedsInvoice   Code = "credit_exceeds_invoice"
 	CodeRecordModeNotAllowed   Code = "record_mode_not_allowed"
 	CodeMembershipWrongState   Code = "membership_wrong_state"
 )
@@ -75,6 +76,7 @@ var httpStatus = map[Code]int{
 	CodeInvoiceWrongState:      http.StatusConflict,
 	CodeInvoiceEmpty:           http.StatusConflict,
 	CodePaymentExceedsBalance:  http.StatusConflict,
+	CodeCreditExceedsInvoice:   http.StatusConflict,
 	CodeRecordModeNotAllowed:   http.StatusUnprocessableEntity,
 	CodeMembershipWrongState:   http.StatusConflict,
 }

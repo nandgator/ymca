@@ -121,6 +121,7 @@ The codes every endpoint may emit, and their status:
 409  invoice_wrong_state     the invoice is not in the state this needs
 409  invoice_empty           nothing to issue
 409  payment_exceeds_balance more than is owed
+409  credit_exceeds_invoice  more than the invoice still asks for (ADR-120)
 409  membership_wrong_state  the membership is not in the state this needs (A3.13)
 422  record_mode_not_allowed the type does not take this kind of recording
 500  internal           anything the caller cannot act on
@@ -282,6 +283,7 @@ FINANCE                                            (detail: A3.11)
   GET    /t/{t}/invoices/{inv}
   POST   /t/{t}/invoices/{inv}/issue                allocate number (ADR-103)
   POST   /t/{t}/invoices/{inv}/payments             record a payment
+  POST   /t/{t}/invoices/{inv}/credit-notes         correct an issued invoice (ADR-120)
 
 ME                                                 (detail: A3.11, A3.12)
   GET    /t/{t}/memberships?q=                     the member directory
@@ -785,6 +787,7 @@ GET  /t/{t}/invoices                             check: finance_reader  (scope)
 GET  /t/{t}/invoices/{inv}                       check: viewer
 POST /t/{t}/invoices/{inv}/issue                 check: finance_manager, Idempotency-Key
 POST /t/{t}/invoices/{inv}/payments              check: finance_manager, Idempotency-Key
+POST /t/{t}/invoices/{inv}/credit-notes          check: finance_manager, Idempotency-Key
 ```
 
 Invoices are **not created by an endpoint**. A3.7 listed list/get/issue/pay
@@ -866,13 +869,38 @@ POST .../invoices/{inv}/payments
 
 `ISSUED` only (`invoice_wrong_state`); currency must equal the invoice's
 (`currency_mismatch`); amount positive and no more than the outstanding
-balance (`payment_exceeds_balance`, 409). The invoice row is locked, so two
+balance — the total less credit notes less earlier payments
+(`payment_exceeds_balance`, 409). The invoice row is locked, so two
 payments cannot both fit the same balance. A payment that brings the balance
 to zero moves the invoice to `PAID`. Every payment through this endpoint is
 staff-recorded: `recorded_by` is the caller's person and the method is one of
 the offline set (`CASH`, `CHEQUE`, `BANK_TRANSFER`, `UPI`); `CARD` and
 `PROVIDER_HOSTED` need an adapter that does not exist (05.8.9). `state` is
 `COMPLETED`.
+
+### Credit notes
+
+```txt
+POST .../invoices/{inv}/credit-notes
+{ "amount": "15.00", "reason": "one egg was never served" }    -> 201
+```
+
+The correction an issued invoice gets (ADR-120); the invoice itself is never
+edited. `ISSUED` or `PAID` only (`invoice_wrong_state`, which a `DRAFT` and a
+`VOIDED` invoice also get). The amount is positive with at most two places and
+no more than the invoice still asks for after earlier credit notes
+(`credit_exceeds_invoice`, 409); the reason is required, at most 500
+characters. The invoice row is locked, so a credit and a payment cannot both
+fit a balance only one can have. The note is numbered `CN/<financial
+year>/<6 digits>` from its own gapless series, drawn last in the transaction
+as an invoice number is (ADR-103).
+
+The invoice then moves by what the new figures imply: **`VOIDED`** when it asks
+for nothing and nothing was received; **`PAID`** when what was received covers
+what it asks; otherwise unchanged. `balance` on the invoice detail is the total
+less payments **and** credit notes, and is **negative when more was received
+than is now asked for — a refund due**. Refunds are payments in reverse and
+have no endpoint (11.2). `credit_notes` appears on the detail, in order issued.
 
 ### Reading
 

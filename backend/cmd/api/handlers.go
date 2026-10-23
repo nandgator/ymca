@@ -283,6 +283,8 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, logger *slog.Logge
 		httpx.WriteError(w, httpx.CodeInvoiceEmpty, err.Error())
 	case errors.Is(err, finance.ErrExceedsBalance):
 		httpx.WriteError(w, httpx.CodePaymentExceedsBalance, err.Error())
+	case errors.Is(err, finance.ErrExceedsInvoice):
+		httpx.WriteError(w, httpx.CodeCreditExceedsInvoice, err.Error())
 	case errors.Is(err, membership.ErrWrongState):
 		httpx.WriteError(w, httpx.CodeMembershipWrongState, err.Error())
 	case errors.Is(err, membership.ErrRevocationFailed):

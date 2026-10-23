@@ -54,6 +54,11 @@ type Invoice struct {
 	Balance       *string   `json:"balance,omitempty"`
 	Charges       []Charge  `json:"charges,omitempty"`
 	Payments      []Payment `json:"payments,omitempty"`
+
+	// CreditNotes are the corrections to an issued invoice. Balance is what is
+	// still owed after payments AND credit notes; negative means more was
+	// received than is now asked for, a refund due (ADR-120).
+	CreditNotes []CreditNote `json:"credit_notes,omitempty"`
 }
 
 const invoiceColumns = `
@@ -142,11 +147,33 @@ func Get(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string) (Invoice, e
 		return Invoice{}, err
 	}
 
+	nrow, err := tx.Query(ctx, `
+		SELECT `+creditNoteColumns+` FROM credit_note
+		 WHERE invoice_id = $1::uuid ORDER BY issued_at, id`, invoiceID)
+	if err != nil {
+		return Invoice{}, fmt.Errorf("finance: read credit notes: %w", err)
+	}
+	inv.CreditNotes = []CreditNote{}
+	for nrow.Next() {
+		var cn CreditNote
+		if err := nrow.Scan(&cn.ID, &cn.Number, &cn.Amount, &cn.Currency, &cn.Reason,
+			&cn.IssuedAt, &cn.IssuedByPersonID); err != nil {
+			nrow.Close()
+			return Invoice{}, err
+		}
+		inv.CreditNotes = append(inv.CreditNotes, cn)
+	}
+	nrow.Close()
+	if err := nrow.Err(); err != nil {
+		return Invoice{}, err
+	}
+
 	if inv.TotalAmount != nil {
 		var balance string
 		if err := tx.QueryRow(ctx, `
-			SELECT ($2::numeric - COALESCE(sum(amount), 0))::text
-			  FROM payment WHERE invoice_id = $1::uuid`,
+			SELECT ($2::numeric
+			        - COALESCE((SELECT sum(amount) FROM payment WHERE invoice_id = $1::uuid), 0)
+			        - COALESCE((SELECT sum(amount) FROM credit_note WHERE invoice_id = $1::uuid), 0))::text`,
 			invoiceID, *inv.TotalAmount).Scan(&balance); err != nil {
 			return Invoice{}, fmt.Errorf("finance: balance: %w", err)
 		}

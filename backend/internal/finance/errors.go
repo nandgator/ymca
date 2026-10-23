@@ -37,6 +37,9 @@ var (
 	// 409 payment_exceeds_balance.
 	ErrExceedsBalance = errors.New("finance: the payment is more than is owed")
 
+	// 409 credit_exceeds_invoice.
+	ErrExceedsInvoice = errors.New("finance: the credit is more than the invoice still asks for")
+
 	// invalid_request: a field is not one this API accepts.
 	ErrInvalid = errors.New("finance: invalid request")
 )

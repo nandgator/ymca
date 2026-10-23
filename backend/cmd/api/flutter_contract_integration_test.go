@@ -34,6 +34,8 @@ func TestFlutterClientAgreesWithTheServer(t *testing.T) {
 	}
 
 	h := newHarness(t, 0x19)
+	// A tenant that is not at UTC, so the Dart half proves it reads the calendar.
+	h.seed(`UPDATE tenant SET time_zone = 'Asia/Kolkata' WHERE id = $1`, h.tenantID)
 	hs := h.newHostel()
 	dinner := hs.addType(map[string]any{"name": "Dinner", "obligates": true, "recurrence": "DAILY"})
 	breakfast := hs.addType(map[string]any{"name": "Breakfast"})

@@ -135,6 +135,7 @@ Status values: **Accepted** · **Deferred** · **Rejected** · **Open**
 | [ADR-117](#adr-117) | Consumption hands off to Finance by a call inside the closing transaction                     | R13        |
 | [ADR-118](#adr-118) | A membership's coverage is revoked synchronously; its term is checked at decision time        | R13        |
 | [ADR-119](#adr-119) | "Today" is the tenant's: a zone on the tenant, and one place that turns an instant into a day | R14        |
+| [ADR-120](#adr-120) | An issued invoice is corrected by a credit note with its own number; the balance is derived   | R14        |
 
 ---
 
@@ -2406,3 +2407,43 @@ the server's own checks never use the client's day. Changing a tenant's zone
 after the fact has no endpoint (11.2): an instant-to-day change moves what
 "today" means for periods already closed, which is an operator's decision
 about a specific tenant and not a setting.
+
+---
+
+### ADR-120
+
+**An issued invoice is corrected by a credit note with its own number; the
+balance is derived** · Accepted · R14
+
+**Decision.** `POST /t/{t}/invoices/{i}/credit-notes` (`finance_manager`,
+idempotent) issues a `credit_note` against an `ISSUED` or `PAID` invoice: a
+positive amount no greater than what the invoice still asks for, and a reason.
+The note's number comes from `invoice_number_series` under kind `CREDIT_NOTE`
+and prefix `CN`, so it is gapless on a counter of its own and never shares one
+with the invoices it corrects; it is drawn last in the transaction, after every
+refusal, for ADR-103's reason. The invoice is never edited. Its `balance` is
+the total less payments less credit notes, computed on read, and its state
+follows from the figures: `VOIDED` when it asks for nothing and nothing was
+received, `PAID` when what was received covers what it asks, otherwise
+unchanged. `RecordPayment` measures a payment against what the invoice asks
+for after its credit notes.
+
+**Rationale.** A2.8 says issued invoices are immutable and corrections are
+credit notes, and 05.8.5 draws `VOIDED` in the state machine; neither had a
+table or an endpoint, so a wrong invoice had no remedy, and the remedy 11.2
+promised for a correction inside a closed period (`period_closed`) did not
+exist. A credit note leaves the consumption record, the closed period and the
+invoice's charges exactly as they were, which is the point: the audit trail
+that charitable accounting depends on keeps both what was billed and what was
+taken back.
+
+**Consequences.** A credit after payment can leave more received than is asked
+for. The balance is then negative and the invoice stays `PAID`: the money
+owed back is visible, and moving it is a refund, which is a payment in reverse
+and has no endpoint yet (11.2). A fully credited invoice can take no further
+credit and no payment (`invoice_wrong_state`). The state `VOIDED` is reached
+only through a credit note, so there is no way to void an invoice that is
+still unpaid for any amount short of its whole. Tax is not apportioned across
+a partial credit, because no tax is computed (11.2). The invoice row is locked
+by both writers, so a credit and a payment racing for one balance serialise;
+that lock is the mechanism and is not separately tested under concurrency.

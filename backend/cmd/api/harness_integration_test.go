@@ -341,6 +341,7 @@ func (h *harness) purge() {
 			`DELETE FROM expected_absence WHERE tenant_id = $1`,
 			`DELETE FROM consumption_option WHERE tenant_id = $1`,
 			`DELETE FROM consumption_rate WHERE tenant_id = $1`,
+			`DELETE FROM credit_note WHERE tenant_id = $1`,
 			`DELETE FROM payment WHERE tenant_id = $1`,
 			`DELETE FROM charge_component WHERE charge_id IN
 			   (SELECT c.id FROM charge c JOIN invoice i ON i.id = c.invoice_id WHERE i.tenant_id = $1)`,

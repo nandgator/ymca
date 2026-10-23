@@ -243,6 +243,7 @@ func registerRoutes(
 	tenantRoute("GET "+t+"/invoices/{invoice}", handleGetInvoice(pool, fga, logger))
 	tenantRoute("POST "+t+"/invoices/{invoice}/issue", handleIssueInvoice(pool, fga, logger))
 	tenantRoute("POST "+t+"/invoices/{invoice}/payments", handlePayInvoice(pool, fga, logger))
+	tenantRoute("POST "+t+"/invoices/{invoice}/credit-notes", handleCreditInvoice(pool, fga, logger))
 	tenantRoute("GET "+t+"/me/consumption", handleMeConsumption(pool, logger))
 	tenantRoute("GET "+t+"/me/consumption-types", handleMeConsumptionTypes(pool, fga, logger))
 	tenantRoute("GET "+t+"/memberships", handleListDirectory(pool, fga, logger))

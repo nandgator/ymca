@@ -776,10 +776,25 @@ CREATE TABLE invoice (
 -- so "the payer's open draft" is a rule the database holds; and `party` is
 -- unique per person and per organization.
 
+-- Added by 0010 (ADR-120): invoice.state also admits 'VOIDED' (credited in full,
+-- nothing received), and the credit note that corrects an issued invoice:
+CREATE TABLE credit_note (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           uuid NOT NULL REFERENCES tenant,
+    invoice_id          uuid NOT NULL REFERENCES invoice,
+    number              text NOT NULL,     -- CN/<financial year>/<6 digits>
+    amount              numeric(14,2) NOT NULL CHECK (amount > 0),
+    currency            char(3) NOT NULL,
+    reason              text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
+    issued_at           timestamptz NOT NULL DEFAULT now(),
+    issued_by_person_id uuid NOT NULL REFERENCES person,
+    UNIQUE (tenant_id, number)
+);
+
 CREATE TABLE invoice_number_series (
     tenant_id  uuid NOT NULL REFERENCES tenant,
     series     text NOT NULL,   -- financial year, e.g. '2026-27'
-    kind       text NOT NULL,   -- LIVE|IMPORTED. ADR-103
+    kind       text NOT NULL,   -- LIVE|IMPORTED|CREDIT_NOTE. ADR-103, ADR-120
     prefix     text,
     next_value bigint NOT NULL DEFAULT 1,
     PRIMARY KEY (tenant_id, series, kind)

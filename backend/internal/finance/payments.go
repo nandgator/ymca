@@ -27,7 +27,8 @@ type NewPayment struct {
 }
 
 // RecordPayment records a payment against an ISSUED invoice and, when it
-// brings the balance to zero, marks the invoice PAID.
+// brings the balance to zero, marks the invoice PAID. The balance is what the
+// invoice asks for after its credit notes (ADR-120).
 //
 // The invoice row is locked, so two payments cannot both fit the same
 // balance: the second reads the first's sum.
@@ -68,9 +69,12 @@ func RecordPayment(
 	var fits bool
 	var balance string
 	if err := tx.QueryRow(ctx, `
-		SELECT $2::numeric <= $3::numeric - COALESCE(sum(amount), 0),
-		       ($3::numeric - COALESCE(sum(amount), 0) - $2::numeric)::text
-		  FROM payment WHERE invoice_id = $1::uuid
+		SELECT $2::numeric <= asked - COALESCE(sum(p.amount), 0),
+		       (asked - COALESCE(sum(p.amount), 0) - $2::numeric)::text
+		  FROM (SELECT $3::numeric - COALESCE((SELECT sum(amount) FROM credit_note
+		                                        WHERE invoice_id = $1::uuid), 0) AS asked) a
+		  LEFT JOIN payment p ON p.invoice_id = $1::uuid
+		 GROUP BY asked
 	`, invoiceID, in.Amount, total).Scan(&fits, &balance); err != nil {
 		return Payment{}, fmt.Errorf("finance: read balance: %w", err)
 	}

@@ -21,6 +21,7 @@ migrations/0006_consumption.sql  voided, once-only supersede, period close, rate
 migrations/0007_finance.sql      invoice order, one draft per payer, party keys
 migrations/0008_membership_lifecycle.sql  the state machine as a CHECK, one open suspension
 migrations/0009_tenant_time_zone.sql  tenant.time_zone, tenant_today and friends, financial_year
+migrations/0010_credit_notes.sql  credit_note, and the VOIDED invoice state
 migrations/embed.go        go:embed for the above
 cmd/migrate/               applies migrations; forward-only
 fga/model.fga              A1.2, reformatted (see below)

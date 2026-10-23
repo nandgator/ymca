@@ -214,6 +214,41 @@ func handlePayInvoice(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.Han
 	}
 }
 
+// handleCreditInvoice is ADR-120's POST /t/{t}/invoices/{i}/credit-notes. It
+// needs the same authority as issuing and paying: a credit note changes what a
+// payer owes.
+func handleCreditInvoice(pool *db.DB, fga *authz.FGA, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := callerPerson(w, r)
+		if !ok || !authorizeTenant(w, r, pool, fga, logger, financeWrite) {
+			return
+		}
+		id := r.PathValue("invoice")
+		var body struct {
+			Amount string `json:"amount"`
+			Reason string `json:"reason"`
+		}
+		raw, err := httpx.ReadJSON(r, &body)
+		if err != nil {
+			httpx.WriteError(w, httpx.CodeInvalidRequest, "request body could not be read as JSON")
+			return
+		}
+		key, err := httpx.IdempotencyKey(r,
+			fmt.Sprintf("POST /t/{t}/invoices/%s/credit-notes", id), raw)
+		if err != nil {
+			writeDomainError(w, r, logger, err)
+			return
+		}
+		tenantID := r.PathValue("tenant")
+		runIdempotent(w, r, pool, logger, key, http.StatusCreated,
+			func(ctx context.Context, tx pgx.Tx) (any, error) {
+				return finance.IssueCreditNote(ctx, tx, tenantID, id, finance.NewCreditNote{
+					Amount: body.Amount, Reason: body.Reason, IssuedBy: actor,
+				})
+			})
+	}
+}
+
 // handleMeInvoices lists the invoices billed to the caller, drafts excluded.
 // Like /me/consumption it is scoped by identity and runs no graph check.
 func handleMeInvoices(pool *db.DB, logger *slog.Logger) http.HandlerFunc {
