@@ -6,6 +6,8 @@
 /// neither does this client.
 library;
 
+import '../util/dates.dart';
+
 typedef Json = Map<String, dynamic>;
 
 String? _s(Json j, String k) => j[k] as String?;
@@ -35,6 +37,8 @@ class Me {
     required this.personId,
     required this.tenantId,
     required this.permissions,
+    this.timeZone = 'UTC',
+    this.utcOffsetSeconds = 0,
   });
 
   final String principalId;
@@ -42,6 +46,13 @@ class Me {
   final String personId;
   final String tenantId;
   final Set<String> permissions;
+
+  /// The tenant's IANA zone and its offset from UTC right now (ADR-119).
+  final String timeZone;
+  final int utcOffsetSeconds;
+
+  /// What "today" means for this tenant.
+  Calendar get calendar => Calendar(utcOffsetSeconds);
 
   bool can(String permission) => permissions.contains(permission);
 
@@ -59,6 +70,8 @@ class Me {
     permissions: {
       for (final p in (j['permissions'] as List? ?? const [])) p as String,
     },
+    timeZone: _s(j, 'time_zone') ?? 'UTC',
+    utcOffsetSeconds: (j['utc_offset_seconds'] as num?)?.toInt() ?? 0,
   );
 }
 

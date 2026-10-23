@@ -302,12 +302,17 @@ class FakeYmcaApi implements YmcaApi {
 }
 
 /// Builders so a test states only what it cares about.
-Me meWith(Set<String> permissions, {String person = 'person-me'}) => Me(
+Me meWith(
+  Set<String> permissions, {
+  String person = 'person-me',
+  int utcOffsetSeconds = 0,
+}) => Me(
   principalId: 'princ-me',
   kind: 'PERSONAL',
   personId: person,
   tenantId: 'tenant-1',
   permissions: permissions,
+  utcOffsetSeconds: utcOffsetSeconds,
 );
 
 ConsumptionType typeNamed(

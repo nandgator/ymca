@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../api/ymca_api.dart';
 import '../state/app_controller.dart';
+import '../util/dates.dart';
 
 /// The outcome of [attempt]: a value, or a message to show a person.
 class Attempt<T> {
@@ -39,6 +40,11 @@ Future<Attempt<T>> attempt<T>(
     return const Attempt._(null, 'Something went wrong. Please try again.');
   }
 }
+
+/// The signed-in tenant's calendar: what "today" is for the association, which
+/// is not the device's day and not UTC's (ADR-119).
+Calendar calendarOf(BuildContext context) =>
+    context.read<AppController>().me?.calendar ?? const Calendar();
 
 /// A message and a Retry button, centred.
 class ErrorRetry extends StatelessWidget {

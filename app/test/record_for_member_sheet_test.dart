@@ -17,8 +17,10 @@ const alice = DirectoryEntry(
   planId: 'plan',
 );
 
-FakeYmcaApi apiOf() => FakeYmcaApi(
-  me: meWith({'tenant:may_approve_membership'}),
+FakeYmcaApi apiOf({int utcOffsetSeconds = 0}) => FakeYmcaApi(
+  me: meWith({
+    'tenant:may_approve_membership',
+  }, utcOffsetSeconds: utcOffsetSeconds),
   recordable: [
     typeNamed('Dinner', id: 'dinner'),
     typeNamed('Lunch', id: 'lunch'),
@@ -79,6 +81,21 @@ void main() {
     expect(find.text('Recorded for Alice'), findsOneWidget);
     expect(find.byKey(const Key('rfm-save')), findsNothing);
   });
+
+  for (final offset in [14 * 3600, -11 * 3600]) {
+    testWidgets('records on the tenant\'s day (offset $offset)', (
+      tester,
+    ) async {
+      final api = apiOf(utcOffsetSeconds: offset);
+      await open(tester, api);
+      await tester.tap(find.byKey(const Key('rfm-day-1')));
+      await tester.pump();
+      await save(tester);
+
+      final call = api.calls.firstWhere((c) => c.startsWith('recordUse'));
+      expect(call, contains('on=${Calendar(offset).daysAgo(1)}'));
+    });
+  }
 
   testWidgets('a refusal leaves the form open; the retry reuses the key', (
     tester,

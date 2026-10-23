@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../api/models.dart';
 import '../api/ymca_api.dart';
-import '../util/dates.dart';
 import '../util/idempotency.dart';
 import 'support.dart';
 
@@ -212,7 +211,7 @@ class _RecordMealSheetState extends State<_RecordMealSheet> {
   }
 
   Future<void> _save() async {
-    final day = daysAgo(_day);
+    final day = calendarOf(context).daysAgo(_day);
     final codes = _chosen.toList()..sort();
     final request = '$day|${codes.join(",")}';
     if (_keyFor != request) {

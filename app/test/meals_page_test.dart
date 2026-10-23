@@ -36,16 +36,18 @@ const egg = ConsumptionOption(
   status: 'AVAILABLE',
 );
 
-FakeYmcaApi apiWith({List<ConsumptionRecord> records = const []}) =>
-    FakeYmcaApi(
-      me: meWith({}),
-      recordable: [
-        typeNamed('Dinner', id: 'dinner'),
-        typeNamed('Staff desk', id: 'desk', mode: 'STAFF'),
-      ],
-      optionList: [egg],
-      records: records,
-    );
+FakeYmcaApi apiWith({
+  List<ConsumptionRecord> records = const [],
+  int utcOffsetSeconds = 0,
+}) => FakeYmcaApi(
+  me: meWith({}, utcOffsetSeconds: utcOffsetSeconds),
+  recordable: [
+    typeNamed('Dinner', id: 'dinner'),
+    typeNamed('Staff desk', id: 'desk', mode: 'STAFF'),
+  ],
+  optionList: [egg],
+  records: records,
+);
 
 Future<void> openSheet(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('record-dinner')));
@@ -104,6 +106,34 @@ void main() {
       find.byKey(const Key('save-meal')),
       findsNothing,
       reason: 'the sheet closes on success',
+    );
+  });
+
+  // Kiritimati is UTC+14 and Pago Pago UTC-11. At every instant at least one
+  // of them is on a different date from UTC, so a screen that counts the UTC
+  // day fails one of the two whenever this runs.
+  for (final offset in [14 * 3600, -11 * 3600]) {
+    testWidgets('the meal is recorded on the tenant\'s day (offset $offset)', (
+      tester,
+    ) async {
+      final api = apiWith(utcOffsetSeconds: offset);
+      await pumpScreen(tester, api, const MealsPage());
+      await openSheet(tester);
+      await tester.tap(find.byKey(const Key('day-1')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('save-meal')));
+      await tester.pumpAndSettle();
+
+      final call = api.calls.firstWhere((c) => c.startsWith('recordUse'));
+      expect(call, contains('on=${Calendar(offset).daysAgo(1)}'));
+    });
+  }
+
+  test('the two offsets above are not both on the UTC date', () {
+    final utc = today();
+    expect(
+      [14 * 3600, -11 * 3600].any((o) => Calendar(o).today() != utc),
+      isTrue,
     );
   });
 

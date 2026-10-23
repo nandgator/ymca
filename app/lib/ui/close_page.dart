@@ -6,9 +6,13 @@ import '../api/ymca_api.dart';
 import '../state/app_controller.dart';
 import '../util/dates.dart';
 import '../util/idempotency.dart';
+import 'support.dart';
 
 class ClosePage extends StatefulWidget {
-  const ClosePage({super.key});
+  const ClosePage({super.key, this.now});
+
+  /// The clock, for tests. The real app reads the device's.
+  final DateTime Function()? now;
 
   @override
   State<ClosePage> createState() => _ClosePageState();
@@ -51,7 +55,7 @@ class _ClosePageState extends State<ClosePage> {
   }
 
   void _initializeDates() {
-    final now = DateTime.now().toUtc();
+    final now = calendarOf(context).wallClock(widget.now?.call());
     final previousMonthEnd = DateTime.utc(
       now.year,
       now.month,
@@ -113,8 +117,8 @@ class _ClosePageState extends State<ClosePage> {
     );
     if (picked != null) {
       setState(() {
-        _fromDate = picked;
-        _fromCtl.text = isoDay(picked);
+        _fromDate = pickedDay(picked);
+        _fromCtl.text = isoDay(_fromDate);
       });
     }
   }
@@ -124,12 +128,12 @@ class _ClosePageState extends State<ClosePage> {
       context: context,
       initialDate: _toDate,
       firstDate: _fromDate,
-      lastDate: DateTime.now().toUtc(),
+      lastDate: calendarOf(context).wallClock(widget.now?.call()),
     );
     if (picked != null) {
       setState(() {
-        _toDate = picked;
-        _toCtl.text = isoDay(picked);
+        _toDate = pickedDay(picked);
+        _toCtl.text = isoDay(_toDate);
       });
     }
   }

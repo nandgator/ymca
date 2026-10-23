@@ -4,8 +4,8 @@ import 'package:provider/provider.dart';
 import '../api/models.dart';
 import '../api/ymca_api.dart';
 import '../state/app_controller.dart';
-import '../util/dates.dart';
 import '../util/idempotency.dart';
+import 'support.dart';
 
 /// Records one meal for somebody else (staff recording on a member's behalf,
 /// A3.10). Completes when the sheet is dismissed.
@@ -86,7 +86,7 @@ class _RecordForMemberSheetState extends State<_RecordForMemberSheet> {
   Future<void> _save() async {
     final typeId = _selectedTypeId;
     if (typeId == null) return;
-    final day = daysAgo(_dayOffset);
+    final day = calendarOf(context).daysAgo(_dayOffset);
     final request = '$typeId|$day|${widget.member.personId}';
     if (_keyFor != request) {
       _key = newIdempotencyKey();

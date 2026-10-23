@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ymca_app/api/models.dart';
 import 'package:ymca_app/api/ymca_api.dart';
 import 'package:ymca_app/ui/close_page.dart';
+import 'package:ymca_app/util/dates.dart';
 
 import 'fake_ymca_api.dart';
 import 'support.dart';
@@ -45,17 +46,48 @@ void main() {
     );
     await pumpScreen(tester, api, const ClosePage());
 
-    // October 22, 2026 is the test date
-    // Previous month: September 2026 (2026-09-01 to 2026-09-30)
+    final now = const Calendar().wallClock();
+    final end = DateTime.utc(
+      now.year,
+      now.month,
+      1,
+    ).subtract(const Duration(days: 1));
     final fromField = find.byKey(const Key('close-from'));
     final toField = find.byKey(const Key('close-to'));
 
     expect(
       (tester.widget<TextField>(fromField).controller?.text),
-      '2026-09-01',
+      isoDay(DateTime.utc(end.year, end.month, 1)),
     );
-    expect((tester.widget<TextField>(toField).controller?.text), '2026-09-30');
+    expect((tester.widget<TextField>(toField).controller?.text), isoDay(end));
   });
+
+  // 20:00 UTC on 31 October is 10:00 on 1 November in Kiritimati (UTC+14) and
+  // 09:00 on 31 October in Pago Pago (UTC-11): the same instant is in two
+  // different months, so the period a tenant is offered depends on its calendar.
+  for (final c in [
+    (14 * 3600, '2026-10-01', '2026-10-31'),
+    (-11 * 3600, '2026-09-01', '2026-09-30'),
+    (0, '2026-09-01', '2026-09-30'),
+  ]) {
+    testWidgets('the default period follows the tenant\'s calendar (${c.$1})', (
+      tester,
+    ) async {
+      final api = FakeYmcaApi(
+        me: meWith({'tenant:admin'}, utcOffsetSeconds: c.$1),
+        typeList: [typeNamed('Dinner')],
+      );
+      await pumpScreen(
+        tester,
+        api,
+        ClosePage(now: () => DateTime.utc(2026, 10, 31, 20)),
+      );
+      String text(String key) =>
+          tester.widget<TextField>(find.byKey(Key(key))).controller!.text;
+      expect(text('close-from'), c.$2);
+      expect(text('close-to'), c.$3);
+    });
+  }
 
   testWidgets('close button is disabled until type is chosen and from <= to', (
     tester,
