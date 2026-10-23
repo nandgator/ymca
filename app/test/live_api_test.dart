@@ -57,6 +57,8 @@ void main() {
     expect(a.canManageFinance, isTrue);
     expect(a.canReadFinance, isTrue);
     expect(a.tenantId, _env('YMCA_TENANT'));
+    expect(a.timeZone, 'Asia/Kolkata');
+    expect(a.calendar.utcOffsetSeconds, 19800);
 
     final m = await alice.me();
     expect(m.permissions, isEmpty, reason: 'a plain member holds nothing');
@@ -249,6 +251,31 @@ void main() {
     );
     expect(p2.id, p.id);
     expect((await admin.invoice(draft)).isPaid, isTrue);
+
+    // A credit note after payment: its own number, and a refund due.
+    final ck = newIdempotencyKey();
+    final note = await admin.creditInvoice(
+      draft,
+      amount: '1.00',
+      reason: 'overcharge',
+      idempotencyKey: ck,
+    );
+    expect(note.number, matches(RegExp(r'^CN/\d{4}-\d{2}/\d{6}$')));
+    expect(
+      (await admin.creditInvoice(
+        draft,
+        amount: '1.00',
+        reason: 'overcharge',
+        idempotencyKey: ck,
+      )).id,
+      note.id,
+      reason: 'a retried credit note is the same credit note',
+    );
+    final after = await admin.invoice(draft);
+    expect(after.creditNotes.single.id, note.id);
+    expect(after.isPaid, isTrue);
+    expect(after.refundDue, isTrue);
+    expect(after.balance, '-1.00');
   });
 
   test('closing a period parses the server\'s own answer', () {

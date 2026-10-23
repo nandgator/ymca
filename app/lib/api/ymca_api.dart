@@ -34,6 +34,7 @@ class ApiException implements Exception {
       'That membership cannot be changed that way right now.',
     'invoice_wrong_state' => 'That invoice cannot be changed right now.',
     'payment_exceeds_balance' => 'That is more than is owed.',
+    'credit_exceeds_invoice' => 'That is more than the invoice still asks for.',
     'currency_mismatch' => 'That currency does not match the invoice.',
     'invalid_request' => 'Please check what you entered.',
     _ => 'Something went wrong. Please try again.',
@@ -139,6 +140,12 @@ abstract class YmcaApi {
     required String method,
     required String amount,
     required String currency,
+    required String idempotencyKey,
+  });
+  Future<CreditNote> creditInvoice(
+    String id, {
+    required String amount,
+    required String reason,
     required String idempotencyKey,
   });
 }

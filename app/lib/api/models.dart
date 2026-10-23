@@ -334,7 +334,37 @@ class Payment {
   );
 }
 
-/// DRAFT -> ISSUED -> PAID (A3.11). `charges`, `payments` and `balance` are
+/// A correction to an issued invoice (ADR-120). It lowers what the invoice
+/// asks for; the invoice itself is never edited.
+class CreditNote {
+  const CreditNote({
+    required this.id,
+    required this.number,
+    required this.amount,
+    required this.currency,
+    required this.reason,
+    required this.issuedAt,
+  });
+
+  final String id;
+  final String number;
+  final String amount;
+  final String currency;
+  final String reason;
+  final String issuedAt;
+
+  factory CreditNote.fromJson(Json j) => CreditNote(
+    id: _req(j, 'id'),
+    number: _req(j, 'number'),
+    amount: _req(j, 'amount'),
+    currency: _req(j, 'currency'),
+    reason: _req(j, 'reason'),
+    issuedAt: _req(j, 'issued_at'),
+  );
+}
+
+/// DRAFT -> ISSUED -> PAID, or VOIDED once credited in full with nothing
+/// received (A3.11, ADR-120). `charges`, `payments` and `balance` are
 /// present on the detail read only.
 class Invoice {
   const Invoice({
@@ -349,6 +379,7 @@ class Invoice {
     required this.balance,
     required this.charges,
     required this.payments,
+    this.creditNotes = const [],
   });
 
   final String id;
@@ -362,10 +393,19 @@ class Invoice {
   final String? balance;
   final List<Charge> charges;
   final List<Payment> payments;
+  final List<CreditNote> creditNotes;
 
   bool get isDraft => state == 'DRAFT';
   bool get isIssued => state == 'ISSUED';
   bool get isPaid => state == 'PAID';
+  bool get isVoided => state == 'VOIDED';
+
+  /// Credit notes correct an invoice that has been issued, whether or not it
+  /// has since been paid.
+  bool get canBeCredited => isIssued || isPaid;
+
+  /// More was received than the invoice now asks for: money owed back.
+  bool get refundDue => (double.tryParse(balance ?? '') ?? 0) < 0;
 
   factory Invoice.fromJson(Json j) => Invoice(
     id: _req(j, 'id'),
@@ -384,6 +424,10 @@ class Invoice {
     payments: [
       for (final p in (j['payments'] as List? ?? const []))
         Payment.fromJson(p as Json),
+    ],
+    creditNotes: [
+      for (final n in (j['credit_notes'] as List? ?? const []))
+        CreditNote.fromJson(n as Json),
     ],
   );
 }

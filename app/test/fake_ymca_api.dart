@@ -299,6 +299,27 @@ class FakeYmcaApi implements YmcaApi {
       receivedAt: '2026-10-22T00:00:00Z',
     );
   }
+
+  @override
+  Future<CreditNote> creditInvoice(
+    String id, {
+    required String amount,
+    required String reason,
+    required String idempotencyKey,
+  }) async {
+    _record(
+      'creditInvoice id=$id amount=$amount reason=$reason '
+      'key=$idempotencyKey',
+    );
+    return CreditNote(
+      id: 'cn-${calls.length}',
+      number: 'CN/2026-27/000001',
+      amount: amount,
+      currency: 'INR',
+      reason: reason,
+      issuedAt: '2026-10-22T00:00:00Z',
+    );
+  }
 }
 
 /// Builders so a test states only what it cares about.
@@ -335,6 +356,7 @@ Invoice invoiceOf(
   String total = '2000.00',
   String? balance,
   String? number = 'INV/2026-27/000001',
+  List<CreditNote> creditNotes = const [],
 }) => Invoice(
   id: id,
   number: state == 'DRAFT' ? null : number,
@@ -356,4 +378,5 @@ Invoice invoiceOf(
     ),
   ],
   payments: const [],
+  creditNotes: creditNotes,
 );

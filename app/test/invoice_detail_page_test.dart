@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ymca_app/api/models.dart';
 import 'package:ymca_app/api/ymca_api.dart';
 import 'package:ymca_app/ui/invoice_detail_page.dart';
 
@@ -169,5 +170,161 @@ void main() {
         isNot(keyOfCall(api, 'payInvoice', 0)),
       );
     });
+  });
+
+  group('issuing a credit note', () {
+    Future<void> openCredit(WidgetTester tester, FakeYmcaApi api) async {
+      await open(tester, api);
+      await tester.tap(find.byKey(const Key('credit-invoice')));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> fill(WidgetTester tester, String amount, String reason) async {
+      await tester.enterText(find.byKey(const Key('credit-amount')), amount);
+      await tester.enterText(find.byKey(const Key('credit-reason')), reason);
+    }
+
+    for (final (state, offered) in [
+      ('ISSUED', true),
+      ('PAID', true),
+      ('DRAFT', false),
+      ('VOIDED', false),
+    ]) {
+      testWidgets(
+        'a $state invoice ${offered ? "can" : "cannot"} be credited',
+        (tester) async {
+          await open(tester, apiFor(state));
+          expect(
+            find.byKey(const Key('credit-invoice')),
+            offered ? findsOneWidget : findsNothing,
+          );
+        },
+      );
+    }
+
+    testWidgets('is not offered to a payer', (tester) async {
+      await open(tester, apiFor('ISSUED'), staff: false);
+      expect(find.byKey(const Key('credit-invoice')), findsNothing);
+    });
+
+    testWidgets('is not offered to a finance reader', (tester) async {
+      await open(
+        tester,
+        apiFor('ISSUED', permissions: {'tenant:finance_reader'}),
+      );
+      expect(find.byKey(const Key('credit-invoice')), findsNothing);
+    });
+
+    testWidgets('needs an amount and a reason', (tester) async {
+      final api = apiFor('ISSUED');
+      await openCredit(tester, api);
+      await fill(tester, '15.00', '');
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Enter an amount and a reason.'), findsOneWidget);
+      expect(callCount(api, 'creditInvoice'), 0);
+    });
+
+    testWidgets('sends the amount, the reason and a key', (tester) async {
+      final api = apiFor('ISSUED');
+      await openCredit(tester, api);
+      await fill(tester, '15.00', 'one egg was never served');
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+
+      final call = api.calls.firstWhere((c) => c.startsWith('creditInvoice'));
+      expect(call, contains('amount=15.00'));
+      expect(call, contains('reason=one egg was never served'));
+      expect(find.text('Credit note issued'), findsOneWidget);
+    });
+
+    testWidgets('a refusal stays in the dialog, and the retry reuses the key', (
+      tester,
+    ) async {
+      final api = apiFor('ISSUED');
+      await openCredit(tester, api);
+      await fill(tester, '9999.00', 'too much');
+      api.failCalls['creditInvoice'] = const ApiException(
+        409,
+        'credit_exceeds_invoice',
+        'more than asked',
+      );
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('That is more than the invoice still asks for.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+      expect(
+        keyOfCall(api, 'creditInvoice', 1),
+        keyOfCall(api, 'creditInvoice', 0),
+      );
+    });
+
+    testWidgets('a different amount or reason is a different request', (
+      tester,
+    ) async {
+      final api = apiFor('ISSUED');
+      await openCredit(tester, api);
+      await fill(tester, '9999.00', 'too much');
+      api.failCalls['creditInvoice'] = const ApiException(
+        409,
+        'credit_exceeds_invoice',
+        'more than asked',
+      );
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const Key('credit-reason')), 'fixed');
+      api.failCalls['creditInvoice'] = const ApiException(
+        409,
+        'credit_exceeds_invoice',
+        'more than asked',
+      );
+      await tester.tap(find.byKey(const Key('save-credit')));
+      await tester.pumpAndSettle();
+
+      expect(
+        keyOfCall(api, 'creditInvoice', 1),
+        isNot(keyOfCall(api, 'creditInvoice', 0)),
+      );
+    });
+  });
+
+  testWidgets('shows credit notes, and a refund due instead of a balance', (
+    tester,
+  ) async {
+    final api = FakeYmcaApi(
+      me: meWith({'tenant:finance_manager'}),
+      invoiceById: {
+        'i1': invoiceOf(
+          'i1',
+          state: 'PAID',
+          balance: '-10.00',
+          creditNotes: const [
+            CreditNote(
+              id: 'cn1',
+              number: 'CN/2026-27/000001',
+              amount: '10.00',
+              currency: 'INR',
+              reason: 'overcharge',
+              issuedAt: '2026-10-02T00:00:00Z',
+            ),
+          ],
+        ),
+      },
+    );
+    await open(tester, api, staff: false);
+
+    expect(find.text('Credit notes'), findsOneWidget);
+    expect(find.text('CN/2026-27/000001 10.00 INR'), findsOneWidget);
+    expect(find.text('overcharge'), findsOneWidget);
+    expect(find.text('Refund due'), findsOneWidget);
+    expect(find.text('Balance'), findsNothing);
+    expect(find.text('-10.00 INR'), findsNothing);
   });
 }

@@ -228,5 +228,6 @@ String stateLabel(String state) => switch (state) {
   'DRAFT' => 'Draft',
   'ISSUED' => 'Issued',
   'PAID' => 'Paid',
+  'VOIDED' => 'Voided',
   _ => state,
 };

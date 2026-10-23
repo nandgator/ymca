@@ -284,4 +284,17 @@ class HttpYmcaApi implements YmcaApi {
       'currency': currency,
     }, key: idempotencyKey),
   );
+
+  @override
+  Future<CreditNote> creditInvoice(
+    String id, {
+    required String amount,
+    required String reason,
+    required String idempotencyKey,
+  }) async => CreditNote.fromJson(
+    await _post('/invoices/$id/credit-notes', {
+      'amount': amount,
+      'reason': reason,
+    }, key: idempotencyKey),
+  );
 }

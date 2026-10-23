@@ -7,9 +7,9 @@ import '../state/app_controller.dart';
 import '../util/idempotency.dart';
 import 'support.dart';
 
-/// One invoice, with its charges and payments. [staff] adds the actions —
-/// issue a draft, record a payment — and only for a principal the server
-/// says holds tenant:finance_manager (A3.9).
+/// One invoice, with its charges, payments and credit notes. [staff] adds the
+/// actions — issue a draft, record a payment, issue a credit note — and only
+/// for a principal the server says holds tenant:finance_manager (A3.9).
 class InvoiceDetailPage extends StatefulWidget {
   const InvoiceDetailPage({
     super.key,
@@ -96,6 +96,22 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
     }
   }
 
+  Future<void> _credit(Invoice invoice) async {
+    final credited = await showDialog<bool>(
+      context: context,
+      builder: (_) => _CreditDialog(
+        invoiceId: invoice.id,
+        currency: invoice.currency,
+        api: context.read<YmcaApi>(),
+        controller: context.read<AppController>(),
+      ),
+    );
+    if (credited == true && mounted) {
+      showFailure(context, 'Credit note issued');
+      await _load();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final Widget body;
@@ -122,7 +138,12 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
             const SizedBox(height: 16),
             if (invoice.totalAmount != null)
               _line('Total', money(invoice.totalAmount!, invoice.currency)),
-            if (invoice.balance != null)
+            if (invoice.balance != null && invoice.refundDue)
+              _line(
+                'Refund due',
+                money(invoice.balance!.substring(1), invoice.currency),
+              )
+            else if (invoice.balance != null)
               _line('Balance', money(invoice.balance!, invoice.currency)),
             if (invoice.dueAt != null) _line('Due', dayOf(invoice.dueAt!)),
             if (invoice.charges.isNotEmpty) ...[
@@ -155,6 +176,19 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                   subtitle: Text(dayOf(p.receivedAt)),
                 ),
             ],
+            if (invoice.creditNotes.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Credit notes',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              for (final n in invoice.creditNotes)
+                ListTile(
+                  dense: true,
+                  title: Text('${n.number} ${money(n.amount, n.currency)}'),
+                  subtitle: Text(n.reason),
+                ),
+            ],
             if (_canManage) ...[
               const SizedBox(height: 24),
               if (invoice.isDraft)
@@ -168,6 +202,15 @@ class _InvoiceDetailPageState extends State<InvoiceDetailPage> {
                   key: const Key('pay-invoice'),
                   onPressed: () => _pay(invoice),
                   child: const Text('Record payment'),
+                ),
+              if (invoice.canBeCredited)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: OutlinedButton(
+                    key: const Key('credit-invoice'),
+                    onPressed: () => _credit(invoice),
+                    child: const Text('Issue credit note'),
+                  ),
                 ),
             ],
           ],
@@ -323,6 +366,133 @@ class _PaymentDialogState extends State<_PaymentDialog> {
         key: const Key('save-payment'),
         onPressed: _saving ? null : _save,
         child: const Text('Save payment'),
+      ),
+    ],
+  );
+}
+
+class _CreditDialog extends StatefulWidget {
+  const _CreditDialog({
+    required this.invoiceId,
+    required this.currency,
+    required this.api,
+    required this.controller,
+  });
+
+  final String invoiceId;
+  final String currency;
+  final YmcaApi api;
+  final AppController controller;
+
+  @override
+  State<_CreditDialog> createState() => _CreditDialogState();
+}
+
+class _CreditDialogState extends State<_CreditDialog> {
+  final TextEditingController _amount = TextEditingController();
+  final TextEditingController _reason = TextEditingController();
+  String? _error;
+  bool _saving = false;
+
+  // One key per credit REQUEST: kept while the same amount and reason are
+  // retried, replaced when either changes (the same key with a different body
+  // is idempotency_key_reused, A3.6).
+  String? _key;
+  String? _keyFor;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _reason.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final amount = _amount.text.trim();
+    final reason = _reason.text.trim();
+    if (amount.isEmpty || reason.isEmpty) {
+      setState(() => _error = 'Enter an amount and a reason.');
+      return;
+    }
+    final request = '$amount|$reason';
+    if (_keyFor != request) {
+      _key = newIdempotencyKey();
+      _keyFor = request;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final navigator = Navigator.of(context);
+    try {
+      await widget.api.creditInvoice(
+        widget.invoiceId,
+        amount: amount,
+        reason: reason,
+        idempotencyKey: _key!,
+      );
+      navigator.pop(true);
+    } on ApiException catch (e) {
+      if (await widget.controller.handleError(e)) {
+        navigator.pop(false);
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _error = e.userMessage;
+        _saving = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Something went wrong. Please try again.';
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Issue credit note'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            key: const Key('credit-amount'),
+            controller: _amount,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Amount (${widget.currency})',
+            ),
+          ),
+          TextField(
+            key: const Key('credit-reason'),
+            controller: _reason,
+            maxLength: 500,
+            decoration: const InputDecoration(labelText: 'Reason'),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                _error!,
+                key: const Key('credit-error'),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('save-credit'),
+        onPressed: _saving ? null : _save,
+        child: const Text('Issue'),
       ),
     ],
   );
