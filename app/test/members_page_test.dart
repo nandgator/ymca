@@ -124,4 +124,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AdmitMemberPage), findsOneWidget);
   });
+
+  test('a member whose term ended is labelled so, and only while ACTIVE', () {
+    DirectoryEntry entry(String state, {bool inTerm = true}) => DirectoryEntry(
+      membershipId: 'm',
+      personId: 'p',
+      displayName: 'A',
+      number: '1',
+      state: state,
+      planId: 'plan',
+      inTerm: inTerm,
+    );
+    expect(entry('ACTIVE').stateLabel, 'ACTIVE');
+    expect(entry('ACTIVE', inTerm: false).stateLabel, 'TERM ENDED');
+    expect(entry('SUSPENDED', inTerm: false).stateLabel, 'SUSPENDED');
+    final parsed = DirectoryEntry.fromJson({
+      'membership_id': 'm',
+      'person_id': 'p',
+      'display_name': 'A',
+      'number': '1',
+      'state': 'ACTIVE',
+      'plan_id': 'plan',
+      'in_term': false,
+    });
+    expect(parsed.inTerm, isFalse);
+    expect(
+      DirectoryEntry.fromJson({
+        'membership_id': 'm',
+        'person_id': 'p',
+        'display_name': 'A',
+        'number': '1',
+        'state': 'ACTIVE',
+        'plan_id': 'plan',
+      }).inTerm,
+      isTrue,
+    );
+  });
 }

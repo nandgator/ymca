@@ -936,7 +936,8 @@ as an invoice number is (ADR-103).
 
 The invoice then moves by what the new figures imply: **`VOIDED`** when it asks
 for nothing and nothing was received; **`PAID`** when what was received covers
-what it asks; otherwise unchanged. `balance` on the invoice detail is the total
+what it asks; otherwise unchanged. `balance` — on the detail and on every row
+of both invoice lists — is the total
 less payments **and** credit notes, and is **negative when more was received
 than is now asked for — a refund due**. Refunds are payments in reverse and
 have no endpoint (11.2). `credit_notes` appears on the detail, in order issued.
@@ -995,6 +996,11 @@ tenant admin sees every type, because `manager` is inside `may_record`.
 Every membership in the tenant with the holder's `display_name`, paged by
 number (A3.5), narrowed by `q` — a prefix of the number or a fragment of the
 name. Checked as `may_approve_membership` on the tenant, once for the page.
+
+Each entry carries `in_term`: whether the membership's term covers today where
+the tenant is (ADR-119). A term that ends sets no state, because 8.7 forbids a
+sweeper, so `state` alone shows such a member as `ACTIVE`; the decision-time
+check refuses them, and `in_term: false` is what tells the front desk why.
 
 `GET /units/{unit}/members` deliberately carries no names: `member_read` on a
 unit must not carry a person's record. This list may, because the authority it

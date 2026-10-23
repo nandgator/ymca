@@ -39,8 +39,8 @@ type Payment struct {
 	RecordedBy        *string `json:"recorded_by"`
 }
 
-// Invoice is a bill. Charges, Payments and Balance appear on the detail read
-// only.
+// Invoice is a bill. Charges, Payments and CreditNotes appear on the detail
+// read only; Balance appears on every read of an issued invoice.
 type Invoice struct {
 	ID            string    `json:"id"`
 	Number        *string   `json:"number"`
@@ -66,12 +66,16 @@ const invoiceColumns = `
 	to_char(i.issued_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	to_char(i.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 	i.total_amount::text,
-	to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`
+	to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US'),
+	(i.total_amount
+	   - COALESCE((SELECT sum(amount) FROM payment WHERE invoice_id = i.id), 0)
+	   - COALESCE((SELECT sum(amount) FROM credit_note WHERE invoice_id = i.id), 0))::text`
 
 func scanInvoice(row pgx.Row) (Invoice, error) {
 	var inv Invoice
 	err := row.Scan(&inv.ID, &inv.Number, &inv.State, &inv.Currency,
-		&inv.PayerPersonID, &inv.IssuedAt, &inv.DueAt, &inv.TotalAmount, &inv.CreatedAt)
+		&inv.PayerPersonID, &inv.IssuedAt, &inv.DueAt, &inv.TotalAmount, &inv.CreatedAt,
+		&inv.Balance)
 	return inv, err
 }
 
@@ -168,17 +172,6 @@ func Get(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string) (Invoice, e
 		return Invoice{}, err
 	}
 
-	if inv.TotalAmount != nil {
-		var balance string
-		if err := tx.QueryRow(ctx, `
-			SELECT ($2::numeric
-			        - COALESCE((SELECT sum(amount) FROM payment WHERE invoice_id = $1::uuid), 0)
-			        - COALESCE((SELECT sum(amount) FROM credit_note WHERE invoice_id = $1::uuid), 0))::text`,
-			invoiceID, *inv.TotalAmount).Scan(&balance); err != nil {
-			return Invoice{}, fmt.Errorf("finance: balance: %w", err)
-		}
-		inv.Balance = &balance
-	}
 	return inv, nil
 }
 

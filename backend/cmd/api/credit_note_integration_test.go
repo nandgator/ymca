@@ -87,6 +87,11 @@ func TestCreditNote_CorrectsAnIssuedInvoice(t *testing.T) {
 		if notes, _ := inv["credit_notes"].([]any); len(notes) != 1 {
 			t.Errorf("%d credit notes on the invoice, want 1", len(notes))
 		}
+		for _, it := range items(t, h.must(h.adminTok, "GET", "/invoices", nil, http.StatusOK)) {
+			if str(it, "id") == a && it["balance"] != "30.00" {
+				t.Errorf("the invoice LIST shows balance %v, want 30.00", it["balance"])
+			}
+		}
 		second := credit(h.adminTok, a, map[string]any{"amount": "5.00", "reason": "goodwill"}, http.StatusCreated)
 		n1 := creditNumber.FindStringSubmatch(str(second, "number"))
 		if n1 == nil || n1[1] <= m[1] {

@@ -195,6 +195,7 @@ class DirectoryEntry {
     required this.number,
     required this.state,
     required this.planId,
+    this.inTerm = true,
   });
 
   final String membershipId;
@@ -204,6 +205,14 @@ class DirectoryEntry {
   final String state;
   final String planId;
 
+  /// Whether the membership's term covers today where the tenant is. A term
+  /// that ended leaves the state ACTIVE (nothing sweeps it) but the member is
+  /// refused at decision time, so the front desk is told.
+  final bool inTerm;
+
+  /// What the directory shows beside the number.
+  String get stateLabel => state == 'ACTIVE' && !inTerm ? 'TERM ENDED' : state;
+
   factory DirectoryEntry.fromJson(Json j) => DirectoryEntry(
     membershipId: _req(j, 'membership_id'),
     personId: _req(j, 'person_id'),
@@ -211,6 +220,7 @@ class DirectoryEntry {
     number: _req(j, 'number'),
     state: _req(j, 'state'),
     planId: _req(j, 'plan_id'),
+    inTerm: j['in_term'] as bool? ?? true,
   );
 }
 

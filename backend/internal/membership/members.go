@@ -113,6 +113,12 @@ type DirectoryEntry struct {
 	State        string  `json:"state"`
 	PlanID       string  `json:"plan_id"`
 	OrgUnitID    *string `json:"org_unit_id"`
+
+	// InTerm is whether the membership's term covers today where the tenant is
+	// (ADR-119). Nothing sets a membership LAPSED when its term ends (8.7
+	// forbids a sweeper), so State alone shows a member whose term ended as
+	// ACTIVE; the decision-time check refuses them, and this says why.
+	InTerm bool `json:"in_term"`
 }
 
 // ListDirectory pages every membership in the tenant with the holder's name,
@@ -134,7 +140,9 @@ func ListDirectory(
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT m.id::text, m.person_id::text, pe.display_name, m.number, m.state,
-		       m.plan_id::text, m.org_unit_id::text
+		       m.plan_id::text, m.org_unit_id::text,
+		       (m.valid_from IS NULL OR m.valid_from <= tenant_today(m.tenant_id))
+		       AND (m.valid_until IS NULL OR m.valid_until >= tenant_today(m.tenant_id))
 		  FROM membership m JOIN person pe ON pe.id = m.person_id
 		 WHERE m.tenant_id = $1
 		   AND ($2::text = '' OR m.number > $2::text)
@@ -152,7 +160,7 @@ func ListDirectory(
 	for rows.Next() {
 		var e DirectoryEntry
 		if err := rows.Scan(&e.MembershipID, &e.PersonID, &e.DisplayName, &e.Number,
-			&e.State, &e.PlanID, &e.OrgUnitID); err != nil {
+			&e.State, &e.PlanID, &e.OrgUnitID, &e.InTerm); err != nil {
 			return nil, fmt.Errorf("membership: scan directory entry: %w", err)
 		}
 		out = append(out, e)

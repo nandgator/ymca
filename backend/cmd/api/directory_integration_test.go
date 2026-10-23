@@ -73,6 +73,32 @@ func TestDirectory_TheFrontDeskFindsMembers(t *testing.T) {
 			t.Errorf("first entry = %v", got[0])
 		}
 	})
+	t.Run("a member whose term has ended is shown as out of term, still ACTIVE", func(t *testing.T) {
+		inTerm := func() map[string]bool {
+			got := map[string]bool{}
+			for _, e := range items(t, h.must(frontdesk.tok, "GET", "/memberships", nil, http.StatusOK)) {
+				got[str(e, "number")] = e["in_term"] == true
+			}
+			return got
+		}
+		if got := inTerm(); !got["H-1"] || !got["H-2"] || !got["H-3"] {
+			t.Fatalf("members with no term are out of term: %v", got)
+		}
+		if err := h.tx(func(q func(string, ...any)) {
+			q(`UPDATE membership SET valid_until = $2::date WHERE id = $1::uuid`, alice.membership, daysAgo(40))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got := inTerm()
+		if got["H-1"] || !got["H-2"] {
+			t.Errorf("in_term = %v, want H-1 out of term and H-2 in", got)
+		}
+		for _, e := range items(t, h.must(frontdesk.tok, "GET", "/memberships?q=H-1", nil, http.StatusOK)) {
+			if e["state"] != "ACTIVE" {
+				t.Errorf("state = %v: the stored state is not changed by a term ending (8.7)", e["state"])
+			}
+		}
+	})
 	t.Run("search matches a name fragment or a number prefix", func(t *testing.T) {
 		byName := items(t, h.must(frontdesk.tok, "GET", "/memberships?q=aro", nil, http.StatusOK))
 		if len(byName) != 1 || byName[0]["display_name"] != "carol" {

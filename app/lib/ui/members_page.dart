@@ -203,7 +203,7 @@ class _MembersPageState extends State<MembersPage> {
         final member = _items[index];
         return ListTile(
           title: Text(member.displayName),
-          subtitle: Text('No. ${member.number} · ${member.state}'),
+          subtitle: Text('No. ${member.number} · ${member.stateLabel}'),
           onTap: () => _showMemberSheet(member),
         );
       },
