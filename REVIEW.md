@@ -985,3 +985,53 @@ had been tested and never used.
 remaining gap), grants that lag, a `LAPSED` nobody sets, coarse suspension
 authority, no credit notes, no tenant time zone, and the consumption and finance
 omissions listed in HANDOFF §7.
+
+### R14 · 2026-10-23/24 · The tenant's own day, a correction for an issued invoice, and plans that change
+
+The slice's loose ends. Nothing here reopened a decision; each item was a thing
+`11.2` had logged as deliberately not done, and doing it found where the record
+had been written around the gap.
+
+**The record had worked around the gap.** A3.10 stored every date as a UTC
+midnight and let "the future" mean more than a day ahead of UTC, "the widest
+zone offset" — a slack that existed only because the zone was unknown. Fixing
+that was not one change: a read of every place the code decides what day it is
+found 54 of them, and two disagreed about it (`authz.go` said UTC explicitly,
+`roles.go` used `current_date`, which follows the database session). ADR-119 puts
+the zone on the tenant and the derivation in three SQL functions. A2.8's
+"corrections are credit notes" and 05.3.2's "plans are versioned, never edited"
+were each stated and each had no table or endpoint; ADR-120 and ADR-121 supply
+them. A3.7 and A3.11 were extended rather than contradicted.
+
+**Found by running it in two zones.** A test of day-boundary code in one zone
+fails for a site that went back to UTC only for part of the day. Kiritimati
+(UTC+14) and Pago Pago (UTC-11) are never both on the UTC date, so running both
+fails at every hour. The same pair is used in Go and in Dart, and one Dart test
+injects a clock so a month boundary is crossed deliberately. That found a test
+already in the app that asserted a hard-coded month and would have failed on
+1 November.
+
+**Found by drift-testing.** Every rule above was removed in turn to see its test
+fail, and one guard was found to be dead: `SupersedePlan` refused a successor that
+was open and replaced, but a replaced plan is always closed (a CHECK), so the
+status clause answered first and the second clause could not fail. It was deleted.
+The test harness ignored the result of deleting its own tenant, so a new
+tenant-scoped table leaked a tenant per run until the next run failed on a
+duplicate key; it reports the failure now.
+
+**Found by the other language.** The first credit note issued from the Dart
+contract test was refused by the real server with `credit_exceeds_invoice` — the
+rule, through the real client, rather than a unit test of it.
+
+**Decisions** (09): ADR-119 (the tenant's day), ADR-120 (credit notes; the balance
+is derived), ADR-121 (plan lifecycle; moving a holder), ADR-122 (the reconciler).
+Migrations 0009, 0010 and 0011. Files: `A2_data_model.md` (tenant, credit note,
+plan change), `A3_api_contract.md` (`/me` calendar, credit notes, plan lifecycle,
+directory `in_term`, six error codes), `11_risks_and_technical_debt.md` (rows
+closed and opened), `02_constraints.md`, `08_crosscutting_concepts.md` (8.7),
+`05.3_membership.md`, `05.8_finance.md`, `12_glossary.md`, `00_README.md`.
+
+**Opened in `11.2`:** a tenant's zone cannot be changed; no refunds; plan
+administration has no screen and no bulk move; the reconciler covers membership
+coverage only and nothing schedules it; the admission share lock and the invoice
+row lock are not tested under concurrency.

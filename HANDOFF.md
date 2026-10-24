@@ -41,14 +41,17 @@ feat(backend): bootstrap-principal gives a registered person a login
 Migrations 0009 (tenant time zone), 0010 (credit notes, `VOIDED`) and 0011
 (plan lifecycle) are applied; the total is eleven. Four ADRs, 119–122.
 
-**Nothing is pushed and this clone has no remote** — `git remote -v` is empty,
-so `origin/main` does not exist here. The CI workflow has still never run on
-GitHub; it was reviewed against the commands run locally and now also checks
-that the suite leaves no tenant and that the graph and database agree.
+**Pushed to a branch, not to `main`.** The work is on `session-9` of
+`nandgator/ymca` (all of it, unsigned, authored as `nandgator`); `main` is still
+at `d4684f7`. No pull request exists, and CI runs only on pull requests and on
+pushes to `main`, so **the workflow has still never run on GitHub**. It was
+reviewed against the commands run locally and now also checks that the suite
+leaves no tenant and that the graph and database agree.
 
-**The commits' author was rewritten** to `nandgator` (the identity of every
-earlier commit) before this was written, and the repo-local git config now
-carries it. No commit message, comment or document names a tool as author.
+**Authorship was rewritten** to `nandgator <38415384+nandgator@users.noreply.github.com>`
+(the identity of every earlier commit), signatures were removed, and git is
+configured to the same identity with signing off. No commit message, comment or
+document names a tool as author.
 
 **Thirteen commits in session 8** (`a29b61c..d4684f7`): 131 files, 15,255 insertions
 across `backend/`, `app/`, `docs/` and `.github/`:
@@ -1073,8 +1076,8 @@ have to run `lifecycle.go`'s shape: void, mark, delete, roll back on failure.
 ## 8. Immediate next actions
 
 ```txt
-1  Push, and watch CI. This clone has no remote; add one, push, and read the
-     first run. Three things in the workflow are still unverified on GitHub: the
+1  Open a pull request from `session-9` and watch CI — that is the first real
+     run. (`session-9` is pushed; nothing is on `main`.) Three things in the workflow are still unverified on GitHub: the
      openfga container (in-memory datastore), the `ymca_api` role creation after
      migration 0001, and the Flutter install the contract test depends on
      (YMCA_REQUIRE_FLUTTER makes it fail, not skip). Session 9 ran every one of

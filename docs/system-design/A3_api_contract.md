@@ -269,6 +269,10 @@ IDENTITY AND MEMBERSHIP
   POST   /t/{t}/people                             create person
   GET    /t/{t}/units/{unit}/members               list  — scope: unit
   POST   /t/{t}/memberships                        admit a member
+  POST   /t/{t}/memberships/{m}/suspend            A3.13, ADR-118
+  POST   /t/{t}/memberships/{m}/reinstate
+  POST   /t/{t}/memberships/{m}/terminate
+  POST   /t/{t}/memberships/{m}/plan               move to another plan (ADR-121)
 
 CONSUMPTION                                        (detail: A3.10)
   POST   /t/{t}/consumption-types                  define a type

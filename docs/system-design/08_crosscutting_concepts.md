@@ -394,6 +394,15 @@ Bengaluru booking a Mumbai pool sees Mumbai time. Booking systems that render
 in viewer-local time produce a class of error that is easy to create and hard
 to detect.
 
+### Calendar days
+
+A calendar day (a membership term, a clearance, `occurred_on`, a financial year)
+is the **tenant's**: `tenant.time_zone` is an IANA region, `UTC` until set, and
+three SQL functions (`tenant_today`, `tenant_day_start`,
+`tenant_utc_offset_seconds`) are the only place an instant becomes a day
+(ADR-119). Stored dates keep A3.10's representation. A client has no zone
+database and takes the offset from `/me`.
+
 ### Expiry
 
 ```txt

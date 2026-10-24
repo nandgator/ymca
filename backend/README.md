@@ -37,7 +37,10 @@ cmd/api/handlers.go        the 6.1 check, A3.4's error mapping, body decoding,
                            and A3.6's flow around one operation
 cmd/api/consumption_handlers.go  A3.10 — and the one place Consumption meets
                            Finance (ADR-117)
-cmd/api/finance_handlers.go      A3.11
+cmd/api/finance_handlers.go      A3.11, and credit notes (ADR-120)
+cmd/api/bootstrap.go             bootstrap-operator
+cmd/api/bootstrap_principal.go   bootstrap-principal — a login for a person
+cmd/api/reconcile.go             reconcile-coverage (ADR-122)
 cmd/api/harness_integration_test.go  the shared setup: production routes
                            (registerRoutes), a tenant, and a cleanup that proves it
 internal/config/           environment configuration
@@ -53,12 +56,16 @@ internal/outbox/           ADR-101 — the fence, and the dispatcher
 internal/page/             A3.5 keyset pagination; the cursor is opaque
 internal/membership/       bundles, plans, and their outbox renderers
 internal/membership/admission.go ADR-107 — a member who may actually do something
-internal/membership/members.go   ADR-104's unit member list
+internal/membership/members.go   ADR-104's unit member list, and the directory
+internal/membership/lifecycle.go suspend, reinstate, terminate (ADR-118)
+internal/membership/plans.go     close, supersede, retire; moving a holder (ADR-121)
+internal/membership/reconcile.go the coverage comparison (ADR-122)
 internal/identity/         people — global rows, tenant-gated (ADR-114)
 internal/consumption/      types, options, obligations, records, corrections,
                            absences and the period close (05.10, A3.10)
-internal/finance/          rates, invoices, issue (ADR-103), payments, and the
-                           charge a closed period composes (A3.11)
+internal/finance/          rates, invoices, issue (ADR-103), payments, credit
+                           notes (ADR-120), and the charge a closed period
+                           composes (A3.11)
 internal/organization/     tenants and their first owner (ADR-113)
 internal/organization/units.go   units and the DAG edges (ADR-016, ADR-115)
 internal/httpx/            the middleware chain, A3.4's errors
@@ -165,6 +172,17 @@ configuration endpoints (bundles, plans, consumption types), the
 people, units and admission endpoints, and one platform-plane route.
 
 ```txt
+POST /api/v1/platform/tenants           may_provision_tenant     platform plane, ADR-113
+GET  /api/v1/t/{t}/me                   any principal of the tenant
+POST /api/v1/t/{t}/entitlement-bundles  admin
+GET  /api/v1/t/{t}/entitlement-bundles  admin
+POST /api/v1/t/{t}/entitlement-bundles/{b}/entitles   admin
+POST /api/v1/t/{t}/membership-plans     admin
+GET  /api/v1/t/{t}/membership-plans     may_approve_membership
+POST /api/v1/t/{t}/membership-plans/{p}/close|reopen|retire|supersede
+                                        admin + Idempotency-Key   ADR-121
+POST /api/v1/t/{t}/consumption-types    admin
+GET  /api/v1/t/{t}/consumption-types    admin
 POST /api/v1/t/{t}/people               may_register_person   ADR-114
 POST /api/v1/t/{t}/units                admin on the NAMED PARENT
 GET  /api/v1/t/{t}/units/{unit}         member on the unit
@@ -179,8 +197,12 @@ Consumption and money (`A3.10`, `A3.11`, `A3.12`):
 POST /t/{t}/memberships/{m}/suspend|reinstate|terminate
                                                  tenant admin + Idempotency-Key
                                                  -> revokes coverage, synchronously
+POST /t/{t}/memberships/{m}/plan                 tenant admin + Idempotency-Key
+                                                 -> moves a holder (ADR-121)
 POST /t/{t}/consumption-types/{ct}/options       manager on the type
+GET  /t/{t}/consumption-types/{ct}/options       may_record on the type
 POST /t/{t}/consumption-types/{ct}/obligations   manager on the type
+GET  /t/{t}/consumption-types/{ct}/records       may_read on the type
 POST /t/{t}/consumption-types/{ct}/records       may_record (person OR principal)
                                                  / may_record_for_other, + the
                                                  SUBJECT's own may_record
@@ -188,6 +210,7 @@ POST /t/{t}/consumption-types/{ct}/records       may_record (person OR principal
 POST /t/{t}/consumption-records/{r}/correction   may_correct [+ may_correct_late]
 POST /t/{t}/absences                             own: an ACTIVE membership
                                                  other: tenant admin
+POST /t/{t}/absences/{a}/withdraw                the declarer, or tenant admin
 POST /t/{t}/consumption-types/{ct}/close         may_close_period + Idempotency-Key
                                                  -> composes the invoice, in the
                                                  same transaction (ADR-117)
@@ -196,6 +219,8 @@ GET  /t/{t}/invoices                             finance_reader   (scope)
 GET  /t/{t}/invoices/{i}                         viewer, as person AND principal
 POST /t/{t}/invoices/{i}/issue                   finance_manager + Idempotency-Key
 POST /t/{t}/invoices/{i}/payments                finance_manager + Idempotency-Key
+POST /t/{t}/invoices/{i}/credit-notes            finance_manager + Idempotency-Key
+                                                 (ADR-120)
 GET  /t/{t}/me/consumption                       own records, by identity
 GET  /t/{t}/me/invoices                          own invoices, drafts excluded
 GET  /t/{t}/me/consumption-types                 what I may record (visibility)

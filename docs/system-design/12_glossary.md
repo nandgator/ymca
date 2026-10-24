@@ -69,6 +69,10 @@ expiry.
 permission — typically given by a guardian for a minor's data. Distinct from
 the guardianship relationship that makes it possible.
 
+**Credit note** — A numbered document that corrects an issued invoice by
+lowering what it asks for, never by editing it. Has its own gapless series. An
+invoice credited in full with nothing received is `VOIDED`. See ADR-120.
+
 **Consumption record** — A record of use that actually happened. Distinct from
 a Booking, which records use that was reserved. Creates no Allocation.
 
@@ -168,6 +172,10 @@ Booking.
 
 **Tenant** — A sovereign association. The root of every authorization path
 and an immutable security boundary.
+
+**Today** — The calendar day it is now _where the tenant is_, not in UTC and not
+on the device. Every membership term, clearance, financial year and "the future"
+is judged against it. See ADR-119.
 
 **Term** — The validity period of a role assignment. Declared as
 `PERMANENT`, `OPTIONAL_TERM` or `MANDATORY_TERM` on the role definition.

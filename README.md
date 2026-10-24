@@ -13,7 +13,7 @@ a pile of disconnected single-tenant deployments.
 ## Start here
 
 **The design is written, and the first slice is built.** A tenant can be
-provisioned, populated, admitted into, fed, billed and paid — through the API
+provisioned, populated, admitted into, fed, billed, paid and corrected — through the API
 and through one permission-gated Flutter app — from a cold start. What is built
 and how to run it:
 
@@ -144,13 +144,12 @@ cross-instance federation. See
 ## Repo layout
 
 ```txt
+backend/              the Go API, migrations and authorization model
+app/                  the Flutter client for members and staff
 docs/system-design/   the architecture description — read this first
+.github/workflows/    CI: docs, build, model, integration suite, app
 prototype/            archived YMCA Mess Management prototype (Go + KMP)
 README.md             this file
 ```
 
-## AI
-
-Built with AI.
-Overseen by Human.
-Purpose: Primarily educational with production potential.
+Built with AI
